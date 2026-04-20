@@ -5,7 +5,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 
-BOT_TOKEN = "ВСТАВЬТЕ_СЮДА_ТОКЕН"
+BOT_TOKEN = "8772449128:AAHgmKD47hnKcvMA17DthpTt5Vyt4mz2r5E"
 
 SCHEDULE = {
     0: [
