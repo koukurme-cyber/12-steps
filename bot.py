@@ -150,13 +150,72 @@ dp = Dispatcher()
 async def cmd_start(message: Message):
     await message.answer(
         "Привет! Я бот с расписанием групп.\n\n"
-        "Выбери команду на клавиатуре ниже:",
-        reply_markup=MENU_KB
+        "Команды:\n"
+        "/menu — меню кнопками\n"
+        "/today — группы на сегодня\n"
+        "/vda — ВДА на сегодня\n"
+        "/coda — CoDA на сегодня\n"
+        "/uaa — UAA на сегодня\n"
+        "/anz — АНЗ на сегодня\n"
+        "/vda_week — ВДА за неделю\n"
+        "/coda_week — CoDA за неделю\n"
+        "/uaa_week — UAA за неделю\n"
+        "/anz_week — АНЗ за неделю\n"
+        "/full — полное расписание на неделю"
     )
 
 @dp.message(Command("menu"))
 async def cmd_menu(message: Message):
     await message.answer("Выбирай команду:", reply_markup=MENU_KB)
+
+@dp.message(F.text == "Сегодня")
+async def btn_today(message: Message):
+    day = datetime.now().weekday()
+    await send_long(message, "Группы на сегодня:\n\n" + format_entries(SCHEDULE.get(day, [])))
+
+@dp.message(F.text == "Полное расписание")
+async def btn_full(message: Message):
+    await send_long(message, "Полное расписание на неделю:\n\n" + full_schedule())
+
+@dp.message(F.text == "ВДА")
+async def btn_vda(message: Message):
+    day = datetime.now().weekday()
+    entries = [e for e in SCHEDULE.get(day, []) if e[2].upper() == "ВДА"]
+    await send_long(message, "ВДА на сегодня:\n\n" + format_entries(entries) if entries else "Сегодня групп ВДА нет.")
+
+@dp.message(F.text == "CoDA")
+async def btn_coda(message: Message):
+    day = datetime.now().weekday()
+    entries = [e for e in SCHEDULE.get(day, []) if e[2].upper() == "CODA"]
+    await send_long(message, "CoDA на сегодня:\n\n" + format_entries(entries) if entries else "Сегодня групп CoDA нет.")
+
+@dp.message(F.text == "UAA")
+async def btn_uaa(message: Message):
+    day = datetime.now().weekday()
+    entries = [e for e in SCHEDULE.get(day, []) if e[2].upper() == "UAA"]
+    await send_long(message, "UAA на сегодня:\n\n" + format_entries(entries) if entries else "Сегодня групп UAA нет.")
+
+@dp.message(F.text == "АНЗ")
+async def btn_anz(message: Message):
+    day = datetime.now().weekday()
+    entries = [e for e in SCHEDULE.get(day, []) if e[2].upper() == "АНЗ"]
+    await send_long(message, "АНЗ на сегодня:\n\n" + format_entries(entries) if entries else "Сегодня групп АНЗ нет.")
+
+@dp.message(F.text == "ВДА неделя")
+async def btn_vda_week(message: Message):
+    await send_long(message, "ВДА за неделю:\n\n" + weekly_by_type("ВДА"))
+
+@dp.message(F.text == "CoDA неделя")
+async def btn_coda_week(message: Message):
+    await send_long(message, "CoDA за неделю:\n\n" + weekly_by_type("CoDA"))
+
+@dp.message(F.text == "UAA неделя")
+async def btn_uaa_week(message: Message):
+    await send_long(message, "UAA за неделю:\n\n" + weekly_by_type("UAA"))
+
+@dp.message(F.text == "АНЗ неделя")
+async def btn_anz_week(message: Message):
+    await send_long(message, "АНЗ за неделю:\n\n" + weekly_by_type("АНЗ"))
 
 @dp.message(Command("help"))
 async def cmd_help(message: Message):
@@ -172,58 +231,8 @@ async def cmd_help(message: Message):
         "/coda_week — CoDA за неделю\n"
         "/uaa_week — UAA за неделю\n"
         "/anz_week — АНЗ за неделю\n"
-        "/full — полное расписание на неделю",
-        reply_markup=MENU_KB
+        "/full — полное расписание на неделю"
     )
-
-@dp.message(Command("today"))
-async def cmd_today(message: Message):
-    day = datetime.now().weekday()
-    await send_long(message, "Группы на сегодня:\n\n" + format_entries(SCHEDULE.get(day, [])))
-
-@dp.message(Command("vda"))
-async def cmd_vda(message: Message):
-    day = datetime.now().weekday()
-    entries = [e for e in SCHEDULE.get(day, []) if e[2].upper() == "ВДА"]
-    await send_long(message, "ВДА на сегодня:\n\n" + format_entries(entries) if entries else "Сегодня групп ВДА нет.")
-
-@dp.message(Command("coda"))
-async def cmd_coda(message: Message):
-    day = datetime.now().weekday()
-    entries = [e for e in SCHEDULE.get(day, []) if e[2].upper() == "CODA"]
-    await send_long(message, "CoDA на сегодня:\n\n" + format_entries(entries) if entries else "Сегодня групп CoDA нет.")
-
-@dp.message(Command("uaa"))
-async def cmd_uaa(message: Message):
-    day = datetime.now().weekday()
-    entries = [e for e in SCHEDULE.get(day, []) if e[2].upper() == "UAA"]
-    await send_long(message, "UAA на сегодня:\n\n" + format_entries(entries) if entries else "Сегодня групп UAA нет.")
-
-@dp.message(Command("anz"))
-async def cmd_anz(message: Message):
-    day = datetime.now().weekday()
-    entries = [e for e in SCHEDULE.get(day, []) if e[2].upper() == "АНЗ"]
-    await send_long(message, "АНЗ на сегодня:\n\n" + format_entries(entries) if entries else "Сегодня групп АНЗ нет.")
-
-@dp.message(Command("vda_week"))
-async def cmd_vda_week(message: Message):
-    await send_long(message, "ВДА за неделю:\n\n" + weekly_by_type("ВДА"))
-
-@dp.message(Command("coda_week"))
-async def cmd_coda_week(message: Message):
-    await send_long(message, "CoDA за неделю:\n\n" + weekly_by_type("CoDA"))
-
-@dp.message(Command("uaa_week"))
-async def cmd_uaa_week(message: Message):
-    await send_long(message, "UAA за неделю:\n\n" + weekly_by_type("UAA"))
-
-@dp.message(Command("anz_week"))
-async def cmd_anz_week(message: Message):
-    await send_long(message, "АНЗ за неделю:\n\n" + weekly_by_type("АНЗ"))
-
-@dp.message(Command("full"))
-async def cmd_full(message: Message):
-    await send_long(message, "Полное расписание на неделю:\n\n" + full_schedule())
 
 async def main():
     bot = Bot(token=BOT_TOKEN)
