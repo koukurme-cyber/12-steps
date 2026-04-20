@@ -5,7 +5,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.types import Message
 
-BOT_TOKEN = "ВСТАВЬТЕ_СЮДА_ТОКЕН"
+BOT_TOKEN = "8613947892:AAF-UjFFhrvJHFyvznTFhaTTvw0A7PiZ0DI"
 
 SCHEDULE = {
     0: [
