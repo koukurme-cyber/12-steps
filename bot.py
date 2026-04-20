@@ -1,9 +1,9 @@
 import asyncio
 from datetime import datetime
 
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 
 BOT_TOKEN = "8772449128:AAHgmKD47hnKcvMA17DthpTt5Vyt4mz2r5E"
 
@@ -97,27 +97,52 @@ SCHEDULE = {
     ],
 }
 
-GROUP_TYPES = {
-    "ВДА": "ВДА",
-    "CODA": "CoDA",
-    "COA": "CoDA",
-    "UAA": "UAA",
-    "АНЗ": "АНЗ",
-}
+DAYS = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+
+MENU_KB = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="Сегодня"), KeyboardButton(text="Полное расписание")],
+        [KeyboardButton(text="ВДА"), KeyboardButton(text="CoDA")],
+        [KeyboardButton(text="UAA"), KeyboardButton(text="АНЗ")],
+        [KeyboardButton(text="ВДА неделя"), KeyboardButton(text="CoDA неделя")],
+        [KeyboardButton(text="UAA неделя"), KeyboardButton(text="АНЗ неделя")],
+    ],
+    resize_keyboard=True
+)
 
 def format_entries(entries):
     return "\n".join(f"{t} — {n} [{k}] — {a}" for t, n, k, a in entries)
 
-def filter_by_type(entries, wanted):
-    wanted = wanted.upper()
-    return [e for e in entries if e[2].upper() == wanted]
+def split_text(text, limit=3800):
+    parts = []
+    while len(text) > limit:
+        cut = text.rfind("\n", 0, limit)
+        if cut == -1:
+            cut = limit
+        parts.append(text[:cut].strip())
+        text = text[cut:].lstrip("\n")
+    if text.strip():
+        parts.append(text.strip())
+    return parts
 
 def full_schedule():
-    names = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
     parts = []
-    for i, day_name in enumerate(names):
+    for i, day_name in enumerate(DAYS):
         parts.append(f"{day_name}:\n{format_entries(SCHEDULE[i])}")
     return "\n\n".join(parts)
+
+def weekly_by_type(kind):
+    kind = kind.upper()
+    parts = []
+    for i, day_name in enumerate(DAYS):
+        entries = [e for e in SCHEDULE[i] if e[2].upper() == kind]
+        if entries:
+            parts.append(f"{day_name}:\n{format_entries(entries)}")
+    return "\n\n".join(parts) if parts else f"По типу [{kind}] записей нет."
+
+async def send_long(message: Message, text: str):
+    for part in split_text(text):
+        await message.answer(part)
 
 dp = Dispatcher()
 
@@ -126,80 +151,88 @@ async def cmd_start(message: Message):
     await message.answer(
         "Привет! Я бот с расписанием групп.\n\n"
         "Команды:\n"
+        "/menu — меню кнопками\n"
         "/today — группы на сегодня\n"
-        "/vda — только ВДА\n"
-        "/coda — только CoDA\n"
-        "/uaa — только UAA\n"
-        "/anz — только АНЗ\n"
-        "/full — полное расписание на неделю\n"
-        "/help — помощь"
+        "/vda — ВДА на сегодня\n"
+        "/coda — CoDA на сегодня\n"
+        "/uaa — UAA на сегодня\n"
+        "/anz — АНЗ на сегодня\n"
+        "/vda_week — ВДА за неделю\n"
+        "/coda_week — CoDA за неделю\n"
+        "/uaa_week — UAA за неделю\n"
+        "/anz_week — АНЗ за неделю\n"
+        "/full — полное расписание на неделю"
     )
+
+@dp.message(Command("menu"))
+async def cmd_menu(message: Message):
+    await message.answer("Выбирай команду:", reply_markup=MENU_KB)
+
+@dp.message(F.text == "Сегодня")
+async def btn_today(message: Message):
+    day = datetime.now().weekday()
+    await send_long(message, "Группы на сегодня:\n\n" + format_entries(SCHEDULE.get(day, [])))
+
+@dp.message(F.text == "Полное расписание")
+async def btn_full(message: Message):
+    await send_long(message, "Полное расписание на неделю:\n\n" + full_schedule())
+
+@dp.message(F.text == "ВДА")
+async def btn_vda(message: Message):
+    day = datetime.now().weekday()
+    entries = [e for e in SCHEDULE.get(day, []) if e[2].upper() == "ВДА"]
+    await send_long(message, "ВДА на сегодня:\n\n" + format_entries(entries) if entries else "Сегодня групп ВДА нет.")
+
+@dp.message(F.text == "CoDA")
+async def btn_coda(message: Message):
+    day = datetime.now().weekday()
+    entries = [e for e in SCHEDULE.get(day, []) if e[2].upper() == "CODA"]
+    await send_long(message, "CoDA на сегодня:\n\n" + format_entries(entries) if entries else "Сегодня групп CoDA нет.")
+
+@dp.message(F.text == "UAA")
+async def btn_uaa(message: Message):
+    day = datetime.now().weekday()
+    entries = [e for e in SCHEDULE.get(day, []) if e[2].upper() == "UAA"]
+    await send_long(message, "UAA на сегодня:\n\n" + format_entries(entries) if entries else "Сегодня групп UAA нет.")
+
+@dp.message(F.text == "АНЗ")
+async def btn_anz(message: Message):
+    day = datetime.now().weekday()
+    entries = [e for e in SCHEDULE.get(day, []) if e[2].upper() == "АНЗ"]
+    await send_long(message, "АНЗ на сегодня:\n\n" + format_entries(entries) if entries else "Сегодня групп АНЗ нет.")
+
+@dp.message(F.text == "ВДА неделя")
+async def btn_vda_week(message: Message):
+    await send_long(message, "ВДА за неделю:\n\n" + weekly_by_type("ВДА"))
+
+@dp.message(F.text == "CoDA неделя")
+async def btn_coda_week(message: Message):
+    await send_long(message, "CoDA за неделю:\n\n" + weekly_by_type("CoDA"))
+
+@dp.message(F.text == "UAA неделя")
+async def btn_uaa_week(message: Message):
+    await send_long(message, "UAA за неделю:\n\n" + weekly_by_type("UAA"))
+
+@dp.message(F.text == "АНЗ неделя")
+async def btn_anz_week(message: Message):
+    await send_long(message, "АНЗ за неделю:\n\n" + weekly_by_type("АНЗ"))
 
 @dp.message(Command("help"))
 async def cmd_help(message: Message):
     await message.answer(
         "Команды бота:\n\n"
+        "/menu — меню кнопками\n"
         "/today — группы на сегодня\n"
-        "/vda — показать все группы ВДА на сегодня\n"
-        "/coda — показать все группы CoDA на сегодня\n"
-        "/uaa — показать все группы UAA на сегодня\n"
-        "/anz — показать все группы АНЗ на сегодня\n"
-        "/full — полное расписание на неделю\n"
+        "/vda — ВДА на сегодня\n"
+        "/coda — CoDA на сегодня\n"
+        "/uaa — UAA на сегодня\n"
+        "/anz — АНЗ на сегодня\n"
+        "/vda_week — ВДА за неделю\n"
+        "/coda_week — CoDA за неделю\n"
+        "/uaa_week — UAA за неделю\n"
+        "/anz_week — АНЗ за неделю\n"
+        "/full — полное расписание на неделю"
     )
-
-@dp.message(Command("today"))
-async def cmd_today(message: Message):
-    day = datetime.now().weekday()
-    entries = SCHEDULE.get(day, [])
-    if entries:
-        await message.answer("Группы на сегодня:\n\n" + format_entries(entries))
-    else:
-        await message.answer("Сегодня групп нет.")
-
-@dp.message(Command("vda"))
-async def cmd_vda(message: Message):
-    day = datetime.now().weekday()
-    entries = filter_by_type(SCHEDULE.get(day, []), "ВДА")
-    if entries:
-        await message.answer("ВДА на сегодня:\n\n" + format_entries(entries))
-    else:
-        await message.answer("Сегодня групп ВДА нет.")
-
-@dp.message(Command("coda"))
-async def cmd_coda(message: Message):
-    day = datetime.now().weekday()
-    entries = filter_by_type(SCHEDULE.get(day, []), "CoDA")
-    if entries:
-        await message.answer("CoDA на сегодня:\n\n" + format_entries(entries))
-    else:
-        await message.answer("Сегодня групп CoDA нет.")
-
-@dp.message(Command("uaa"))
-async def cmd_uaa(message: Message):
-    day = datetime.now().weekday()
-    entries = filter_by_type(SCHEDULE.get(day, []), "UAA")
-    if entries:
-        await message.answer("UAA на сегодня:\n\n" + format_entries(entries))
-    else:
-        await message.answer("Сегодня групп UAA нет.")
-
-@dp.message(Command("anz"))
-async def cmd_anz(message: Message):
-    day = datetime.now().weekday()
-    entries = filter_by_type(SCHEDULE.get(day, []), "АНЗ")
-    if entries:
-        await message.answer("АНЗ на сегодня:\n\n" + format_entries(entries))
-    else:
-        await message.answer("Сегодня групп АНЗ нет.")
-
-@dp.message(Command("full"))
-async def cmd_full(message: Message):
-    text = full_schedule()
-    if len(text) <= 3800:
-        await message.answer(text)
-    else:
-        for i in range(0, len(text), 3800):
-            await message.answer(text[i:i+3800])
 
 async def main():
     bot = Bot(token=BOT_TOKEN)
