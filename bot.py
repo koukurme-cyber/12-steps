@@ -5,7 +5,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.types import Message
 
-BOT_TOKEN = "8613947892:AAF-UjFFhrvJHFyvznTFhaTTvw0A7PiZ0DI"
+BOT_TOKEN = "8772449128:AAHgmKD47hnKcvMA17DthpTt5Vyt4mz2r5E"
 
 SCHEDULE = {
     0: [
