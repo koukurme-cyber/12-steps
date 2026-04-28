@@ -252,7 +252,7 @@ def get_menu_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="📅 Сегодня"), KeyboardButton(text="📋 Полное расписание")],
             [KeyboardButton(text="🟠 ВДА сегодня"), KeyboardButton(text="🔵 CoDA сегодня")],
             [KeyboardButton(text="🟢 UAA сегодня"), KeyboardButton(text="🟡 АНЗ сегодня")],
-            [KeyboardButton(text="📆 Выбрать день"), KeyboardButton(text="💫 Случайный девиз/аффирмация")],
+            [KeyboardButton(text="📆 Выбрать день"), KeyboardButton(text="💫 девиз/аффирмация")],
         ],
         resize_keyboard=True,
     )
@@ -305,7 +305,7 @@ async def cmd_start(message: Message):
     await message.answer(
         "/today — группы на сегодня\n"
         "/full — полное расписание\n"
-        "/slogan — случайный девиз/аффирмация\n"
+        "/slogan — девиз/аффирмация\n"
         "/help — помощь"
     )
 
