@@ -1,7 +1,8 @@
 import asyncio
 import os
+import random
 from datetime import datetime
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -110,7 +111,8 @@ SCHEDULE = {
 
 DAYS = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
 
-SLOGANS = [
+SLOGANS_AND_AFFIRMATIONS = [
+    # Девизы ВДА
     "Программа простая, но не лёгкая",
     "Жизнь больше, чем просто выживание",
     "Можно жить по-другому",
@@ -126,6 +128,39 @@ SLOGANS = [
     "Назови, но не обвиняй",
     "Попроси о помощи и прими её",
     "Без чувств нет исцеления",
+    
+    # Аффирмации на русском
+    "Сегодня я люблю и принимаю себя таким, какой я есть",
+    "Сегодня я принимаю свои чувства",
+    "Сегодня я делюсь своими чувствами",
+    "Сегодня я позволяю себе совершать ошибки",
+    "Сегодня я люблю себя таким, какой я есть",
+    "Сегодня мне достаточно того, кто я есть",
+    "Сегодня я принимаю тебя таким, какой ты есть",
+    "Сегодня я позволю жить другим",
+    "Сегодня я попрошу мою Высшую Силу о поддержке и руководстве мной",
+    "Сегодня я не стану обвинять ни тебя, ни себя",
+    "Сегодня я имею право оберегать свои мысли, чувства и заботиться о своём теле",
+    "Сегодня я смогу сказать «Нет» без чувства вины",
+    "Сегодня я смогу сказать «Да» без чувства стыда",
+    "Сегодня я желанный ребёнок любящих родителей",
+    
+    # Адаптированные "It's okay" аффирмации
+    "Нормально знать, кто я есть",
+    "Нормально доверять себе",
+    "Нормально сказать: я взрослый ребёнок из дисфункциональной семьи",
+    "Нормально знать другой способ жить",
+    "Нормально отказывать без чувства вины",
+    "Нормально дать себе передышку",
+    "Нормально плакать от фильма или песни",
+    "Мои чувства нормальны, даже если я их только учусь различать",
+    "Нормально злиться",
+    "Нормально веселиться и праздновать",
+    "Нормально мечтать и надеяться",
+    "Нормально отделяться с любовью",
+    "Нормально заново учиться заботиться о себе",
+    "Нормально сказать: я люблю себя",
+    "Нормально работать по программе ВДА",
 ]
 
 TYPE_EMOJI = {
@@ -217,7 +252,7 @@ def get_menu_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="📅 Сегодня"), KeyboardButton(text="📋 Полное расписание")],
             [KeyboardButton(text="🟠 ВДА сегодня"), KeyboardButton(text="🔵 CoDA сегодня")],
             [KeyboardButton(text="🟢 UAA сегодня"), KeyboardButton(text="🟡 АНЗ сегодня")],
-            [KeyboardButton(text="📆 Выбрать день"), KeyboardButton(text="💫 Случайный девиз")],
+            [KeyboardButton(text="📆 Выбрать день"), KeyboardButton(text="💫 Случайный девиз/аффирмация")],
         ],
         resize_keyboard=True,
     )
@@ -270,7 +305,7 @@ async def cmd_start(message: Message):
     await message.answer(
         "/today — группы на сегодня\n"
         "/full — полное расписание\n"
-        "/slogan — случайный девиз\n"
+        "/slogan — случайный девиз/аффирмация\n"
         "/help — помощь"
     )
 
@@ -290,9 +325,12 @@ async def cmd_full(message: Message):
 
 @dp.message(Command("slogan"))
 async def cmd_slogan(message: Message):
-    import random
-    slogan = random.choice(SLOGANS)
-    await message.answer(f"💫 <b>Девиз на сейчас:</b>\n\n<i>«{slogan}»</i>", parse_mode="HTML")
+    slogan = random.choice(SLOGANS_AND_AFFIRMATIONS)
+    await message.answer(
+        f"💫 <b>Девиз или аффирмация на сейчас:</b>\n\n"
+        f"<i>«{escape_html(slogan)}»</i>",
+        parse_mode="HTML"
+    )
 
 
 @dp.message(Command("help"))
@@ -303,7 +341,7 @@ async def cmd_help(message: Message):
         "/start — перезапуск бота\n"
         "/today — группы на сегодня\n"
         "/full — полное расписание\n"
-        "/slogan — случайный девиз\n\n"
+        "/slogan — случайный девиз/аффирмация\n\n"
         "<b>Фильтры по типам:</b>\n"
         "/vda — ВДА сегодня\n"
         "/coda — CoDA сегодня\n"
@@ -381,7 +419,7 @@ async def btn_anz(message: Message):
     await cmd_anz_today(message)
 
 
-@dp.message(F.text == "💫 Случайный девиз")
+@dp.message(F.text == "💫 Случайный девиз/аффирмация")
 async def btn_slogan(message: Message):
     await cmd_slogan(message)
 
