@@ -129,12 +129,11 @@ SLOGANS_AND_AFFIRMATIONS = [
     "Попроси о помощи и прими её",
     "Без чувств нет исцеления",
     
-    # Аффирмации на русском
+    # Аффирмации
     "Сегодня я люблю и принимаю себя таким, какой я есть",
     "Сегодня я принимаю свои чувства",
     "Сегодня я делюсь своими чувствами",
     "Сегодня я позволяю себе совершать ошибки",
-    "Сегодня я люблю себя таким, какой я есть",
     "Сегодня мне достаточно того, кто я есть",
     "Сегодня я принимаю тебя таким, какой ты есть",
     "Сегодня я позволю жить другим",
@@ -145,7 +144,7 @@ SLOGANS_AND_AFFIRMATIONS = [
     "Сегодня я смогу сказать «Да» без чувства стыда",
     "Сегодня я желанный ребёнок любящих родителей",
     
-    # Адаптированные "It's okay" аффирмации
+    # "It's okay" аффирмации
     "Нормально знать, кто я есть",
     "Нормально доверять себе",
     "Нормально сказать: я взрослый ребёнок из дисфункциональной семьи",
@@ -252,7 +251,7 @@ def get_menu_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="📅 Сегодня"), KeyboardButton(text="📋 Полное расписание")],
             [KeyboardButton(text="🟠 ВДА сегодня"), KeyboardButton(text="🔵 CoDA сегодня")],
             [KeyboardButton(text="🟢 UAA сегодня"), KeyboardButton(text="🟡 АНЗ сегодня")],
-            [KeyboardButton(text="📆 Выбрать день"), KeyboardButton(text="💫 девиз/аффирмация")],
+            [KeyboardButton(text="📆 Выбрать день"), KeyboardButton(text="💫 Установка на день")],
         ],
         resize_keyboard=True,
     )
@@ -305,7 +304,7 @@ async def cmd_start(message: Message):
     await message.answer(
         "/today — группы на сегодня\n"
         "/full — полное расписание\n"
-        "/slogan — девиз/аффирмация\n"
+        "/slogan — установка на день\n"
         "/help — помощь"
     )
 
@@ -327,7 +326,7 @@ async def cmd_full(message: Message):
 async def cmd_slogan(message: Message):
     slogan = random.choice(SLOGANS_AND_AFFIRMATIONS)
     await message.answer(
-        f"💫 <b>Девиз или аффирмация на сейчас:</b>\n\n"
+        f"💫 <b>Установка на день:</b>\n\n"
         f"<i>«{escape_html(slogan)}»</i>",
         parse_mode="HTML"
     )
@@ -341,7 +340,7 @@ async def cmd_help(message: Message):
         "/start — перезапуск бота\n"
         "/today — группы на сегодня\n"
         "/full — полное расписание\n"
-        "/slogan — случайный девиз/аффирмация\n\n"
+        "/slogan — установка на день\n\n"
         "<b>Фильтры по типам:</b>\n"
         "/vda — ВДА сегодня\n"
         "/coda — CoDA сегодня\n"
@@ -419,7 +418,7 @@ async def btn_anz(message: Message):
     await cmd_anz_today(message)
 
 
-@dp.message(F.text == "💫 Случайный девиз/аффирмация")
+@dp.message(F.text == "💫 Установка на день")
 async def btn_slogan(message: Message):
     await cmd_slogan(message)
 
