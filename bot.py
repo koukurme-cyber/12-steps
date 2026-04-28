@@ -1,11 +1,22 @@
 import asyncio
+import os
 from datetime import datetime
+from typing import List, Tuple, Optional
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import (
+    Message,
+    CallbackQuery,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
 
-BOT_TOKEN = "8772449128:AAHgmKD47hnKcvMA17DthpTt5Vyt4mz2r5E"
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8772449128:AAHgmKD47hnKcvMA17DthpTt5Vyt4mz2r5E")
+
+# ==================== ДАННЫЕ ====================
 
 SCHEDULE = {
     0: [
@@ -99,21 +110,55 @@ SCHEDULE = {
 
 DAYS = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
 
-MENU_KB = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="Сегодня"), KeyboardButton(text="Полное расписание")],
-        [KeyboardButton(text="ВДА"), KeyboardButton(text="CoDA")],
-        [KeyboardButton(text="UAA"), KeyboardButton(text="АНЗ")],
-        [KeyboardButton(text="ВДА неделя"), KeyboardButton(text="CoDA неделя")],
-        [KeyboardButton(text="UAA неделя"), KeyboardButton(text="АНЗ неделя")],
-    ],
-    resize_keyboard=True
-)
+SLOGANS = [
+    "Программа простая, но не лёгкая",
+    "Жизнь больше, чем просто выживание",
+    "Можно жить по-другому",
+    "Только сегодня",
+    "Не суетись",
+    "Не усложняй",
+    "Прогресс, а не совершенство",
+    "Первым делом — главное",
+    "И эта боль тоже пройдет",
+    "Отпусти. Пусти Бога",
+    "Стоп — не будь Голодным, Злым, Одиноким и Уставшим",
+    "Возвращайтесь снова и снова",
+    "Назови, но не обвиняй",
+    "Попроси о помощи и прими её",
+    "Без чувств нет исцеления",
+]
 
-def format_entries(entries):
-    return "\n".join(f"{t} — {n} [{k}] — {a}" for t, n, k, a in entries)
+TYPE_EMOJI = {
+    "ВДА": "🟠",
+    "CoDA": "🔵",
+    "UAA": "🟢",
+    "АНЗ": "🟡",
+}
 
-def split_text(text, limit=3800):
+# ==================== ФОРМАТИРОВАНИЕ ====================
+
+def escape_html(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def format_group(time: str, name: str, kind: str, address: str) -> str:
+    emoji = TYPE_EMOJI.get(kind, "⚪")
+    safe_name = escape_html(name)
+    safe_addr = escape_html(address)
+    return f"{emoji} <b>{time}</b> — {safe_name} [{kind}]\n   📍 {safe_addr}"
+
+
+def format_groups(groups: List[Tuple[str, str, str, str]], title: str = "") -> str:
+    if not groups:
+        return f"<i>{title}</i>\n\nГрупп не найдено."
+    
+    lines = [f"<b>{title}</b>\n"] if title else []
+    lines.extend(format_group(*g) for g in groups)
+    return "\n".join(lines)
+
+
+def split_long_message(text: str, limit: int = 3800) -> List[str]:
+    """Разбивает длинное сообщение на части, сохраняя HTML-теги."""
     parts = []
     while len(text) > limit:
         cut = text.rfind("\n", 0, limit)
@@ -125,118 +170,255 @@ def split_text(text, limit=3800):
         parts.append(text.strip())
     return parts
 
-def full_schedule():
-    parts = []
-    for i, day_name in enumerate(DAYS):
-        parts.append(f"{day_name}:\n{format_entries(SCHEDULE[i])}")
-    return "\n\n".join(parts)
 
-def weekly_by_type(kind):
-    kind = kind.upper()
-    parts = []
-    for i, day_name in enumerate(DAYS):
-        entries = [e for e in SCHEDULE[i] if e[2].upper() == kind]
-        if entries:
-            parts.append(f"{day_name}:\n{format_entries(entries)}")
-    return "\n\n".join(parts) if parts else f"По типу [{kind}] записей нет."
+# ==================== БИЗНЕС-ЛОГИКА ====================
 
-async def send_long(message: Message, text: str):
-    for part in split_text(text):
-        await message.answer(part)
+class ScheduleService:
+    @staticmethod
+    def get_today() -> Tuple[str, List]:
+        day_index = datetime.now().weekday()
+        return DAYS[day_index], SCHEDULE.get(day_index, [])
+    
+    @staticmethod
+    def get_by_day(day_index: int) -> Tuple[str, List]:
+        if 0 <= day_index <= 6:
+            return DAYS[day_index], SCHEDULE.get(day_index, [])
+        return "", []
+    
+    @staticmethod
+    def get_by_type(groups: List, kind: str) -> List:
+        return [g for g in groups if g[2].upper() == kind.upper()]
+    
+    @staticmethod
+    def get_weekly_by_type(kind: str) -> str:
+        kind_upper = kind.upper()
+        parts = []
+        for i, day_name in enumerate(DAYS):
+            entries = ScheduleService.get_by_type(SCHEDULE[i], kind_upper)
+            if entries:
+                parts.append(format_groups(entries, f"{day_name}:"))
+        return "\n\n".join(parts) if parts else f"Групп типа [{kind}] на неделе нет."
+    
+    @staticmethod
+    def get_full_schedule() -> str:
+        parts = []
+        for i, day_name in enumerate(DAYS):
+            entries = sorted(SCHEDULE[i], key=lambda x: x[0])
+            if entries:
+                parts.append(format_groups(entries, f"{day_name}:"))
+        return "\n\n".join(parts)
+
+
+# ==================== КЛАВИАТУРЫ ====================
+
+def get_menu_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📅 Сегодня"), KeyboardButton(text="📋 Полное расписание")],
+            [KeyboardButton(text="🟠 ВДА сегодня"), KeyboardButton(text="🔵 CoDA сегодня")],
+            [KeyboardButton(text="🟢 UAA сегодня"), KeyboardButton(text="🟡 АНЗ сегодня")],
+            [KeyboardButton(text="📆 Выбрать день"), KeyboardButton(text="💫 Случайный девиз")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def get_days_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Пн", callback_data="day_0"),
+                InlineKeyboardButton(text="Вт", callback_data="day_1"),
+                InlineKeyboardButton(text="Ср", callback_data="day_2"),
+                InlineKeyboardButton(text="Чт", callback_data="day_3"),
+            ],
+            [
+                InlineKeyboardButton(text="Пт", callback_data="day_4"),
+                InlineKeyboardButton(text="Сб", callback_data="day_5"),
+                InlineKeyboardButton(text="Вс", callback_data="day_6"),
+            ],
+        ]
+    )
+
+
+# ==================== ОТПРАВКА СООБЩЕНИЙ ====================
+
+async def send_long_message(message: Message, text: str, parse_mode: str = "HTML"):
+    """Отправляет длинное сообщение, разбивая его при необходимости."""
+    parts = split_long_message(text)
+    for part in parts:
+        await message.answer(part, parse_mode=parse_mode)
+
+
+# ==================== ДИСПЕТЧЕР ====================
 
 dp = Dispatcher()
+
+
+# ==================== КОМАНДЫ ====================
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     await message.answer(
-        "Привет! Я бот с расписанием групп.\n\n"
-        "Команды:\n"
-        "/menu — меню кнопками\n"
+        "🕊 <b>Добро пожаловать в бот-помощник 12-шагового сообщества!</b>\n\n"
+        "Здесь ты найдёшь расписание групп ВДА, CoDA, UAA и АНЗ в Санкт-Петербурге.\n\n"
+        "<i>«Жизнь больше, чем просто выживание»</i>\n\n"
+        "Выбери действие на клавиатуре или используй команды:",
+        parse_mode="HTML",
+        reply_markup=get_menu_keyboard(),
+    )
+    await message.answer(
         "/today — группы на сегодня\n"
-        "/vda — ВДА на сегодня\n"
-        "/coda — CoDA на сегодня\n"
-        "/uaa — UAA на сегодня\n"
-        "/anz — АНЗ на сегодня\n"
-        "/vda_week — ВДА за неделю\n"
-        "/coda_week — CoDA за неделю\n"
-        "/uaa_week — UAA за неделю\n"
-        "/anz_week — АНЗ за неделю\n"
-        "/full — полное расписание на неделю"
+        "/full — полное расписание\n"
+        "/slogan — случайный девиз\n"
+        "/help — помощь"
     )
 
-@dp.message(Command("menu"))
-async def cmd_menu(message: Message):
-    await message.answer("Выбирай команду:", reply_markup=MENU_KB)
 
-@dp.message(F.text == "Сегодня")
-async def btn_today(message: Message):
-    day = datetime.now().weekday()
-    await send_long(message, "Группы на сегодня:\n\n" + format_entries(SCHEDULE.get(day, [])))
+@dp.message(Command("today"))
+async def cmd_today(message: Message):
+    day_name, groups = ScheduleService.get_today()
+    text = format_groups(groups, f"📅 Группы на сегодня ({day_name}):")
+    await send_long_message(message, text)
 
-@dp.message(F.text == "Полное расписание")
-async def btn_full(message: Message):
-    await send_long(message, "Полное расписание на неделю:\n\n" + full_schedule())
 
-@dp.message(F.text == "ВДА")
-async def btn_vda(message: Message):
-    day = datetime.now().weekday()
-    entries = [e for e in SCHEDULE.get(day, []) if e[2].upper() == "ВДА"]
-    await send_long(message, "ВДА на сегодня:\n\n" + format_entries(entries) if entries else "Сегодня групп ВДА нет.")
+@dp.message(Command("full"))
+async def cmd_full(message: Message):
+    text = "📋 <b>Полное расписание на неделю:</b>\n\n" + ScheduleService.get_full_schedule()
+    await send_long_message(message, text)
 
-@dp.message(F.text == "CoDA")
-async def btn_coda(message: Message):
-    day = datetime.now().weekday()
-    entries = [e for e in SCHEDULE.get(day, []) if e[2].upper() == "CODA"]
-    await send_long(message, "CoDA на сегодня:\n\n" + format_entries(entries) if entries else "Сегодня групп CoDA нет.")
 
-@dp.message(F.text == "UAA")
-async def btn_uaa(message: Message):
-    day = datetime.now().weekday()
-    entries = [e for e in SCHEDULE.get(day, []) if e[2].upper() == "UAA"]
-    await send_long(message, "UAA на сегодня:\n\n" + format_entries(entries) if entries else "Сегодня групп UAA нет.")
+@dp.message(Command("slogan"))
+async def cmd_slogan(message: Message):
+    import random
+    slogan = random.choice(SLOGANS)
+    await message.answer(f"💫 <b>Девиз на сейчас:</b>\n\n<i>«{slogan}»</i>", parse_mode="HTML")
 
-@dp.message(F.text == "АНЗ")
-async def btn_anz(message: Message):
-    day = datetime.now().weekday()
-    entries = [e for e in SCHEDULE.get(day, []) if e[2].upper() == "АНЗ"]
-    await send_long(message, "АНЗ на сегодня:\n\n" + format_entries(entries) if entries else "Сегодня групп АНЗ нет.")
-
-@dp.message(F.text == "ВДА неделя")
-async def btn_vda_week(message: Message):
-    await send_long(message, "ВДА за неделю:\n\n" + weekly_by_type("ВДА"))
-
-@dp.message(F.text == "CoDA неделя")
-async def btn_coda_week(message: Message):
-    await send_long(message, "CoDA за неделю:\n\n" + weekly_by_type("CoDA"))
-
-@dp.message(F.text == "UAA неделя")
-async def btn_uaa_week(message: Message):
-    await send_long(message, "UAA за неделю:\n\n" + weekly_by_type("UAA"))
-
-@dp.message(F.text == "АНЗ неделя")
-async def btn_anz_week(message: Message):
-    await send_long(message, "АНЗ за неделю:\n\n" + weekly_by_type("АНЗ"))
 
 @dp.message(Command("help"))
 async def cmd_help(message: Message):
     await message.answer(
-        "Команды бота:\n\n"
-        "/menu — меню кнопками\n"
+        "📖 <b>Справка:</b>\n\n"
+        "<b>Основные команды:</b>\n"
+        "/start — перезапуск бота\n"
         "/today — группы на сегодня\n"
-        "/vda — ВДА на сегодня\n"
-        "/coda — CoDA на сегодня\n"
-        "/uaa — UAA на сегодня\n"
-        "/anz — АНЗ на сегодня\n"
-        "/vda_week — ВДА за неделю\n"
-        "/coda_week — CoDA за неделю\n"
-        "/uaa_week — UAA за неделю\n"
-        "/anz_week — АНЗ за неделю\n"
-        "/full — полное расписание на неделю"
+        "/full — полное расписание\n"
+        "/slogan — случайный девиз\n\n"
+        "<b>Фильтры по типам:</b>\n"
+        "/vda — ВДА сегодня\n"
+        "/coda — CoDA сегодня\n"
+        "/uaa — UAA сегодня\n"
+        "/anz — АНЗ сегодня\n\n"
+        "<b>Или используй кнопки меню.</b>",
+        parse_mode="HTML",
+        reply_markup=get_menu_keyboard(),
     )
 
+
+# ==================== ФИЛЬТРЫ ПО ТИПАМ ====================
+
+@dp.message(Command("vda"))
+async def cmd_vda_today(message: Message):
+    _, groups = ScheduleService.get_today()
+    filtered = ScheduleService.get_by_type(groups, "ВДА")
+    text = format_groups(filtered, "🟠 Группы ВДА сегодня:")
+    await send_long_message(message, text)
+
+
+@dp.message(Command("coda"))
+async def cmd_coda_today(message: Message):
+    _, groups = ScheduleService.get_today()
+    filtered = ScheduleService.get_by_type(groups, "CoDA")
+    text = format_groups(filtered, "🔵 Группы CoDA сегодня:")
+    await send_long_message(message, text)
+
+
+@dp.message(Command("uaa"))
+async def cmd_uaa_today(message: Message):
+    _, groups = ScheduleService.get_today()
+    filtered = ScheduleService.get_by_type(groups, "UAA")
+    text = format_groups(filtered, "🟢 Группы UAA сегодня:")
+    await send_long_message(message, text)
+
+
+@dp.message(Command("anz"))
+async def cmd_anz_today(message: Message):
+    _, groups = ScheduleService.get_today()
+    filtered = ScheduleService.get_by_type(groups, "АНЗ")
+    text = format_groups(filtered, "🟡 Группы АНЗ сегодня:")
+    await send_long_message(message, text)
+
+
+# ==================== КНОПКИ МЕНЮ ====================
+
+@dp.message(F.text == "📅 Сегодня")
+async def btn_today(message: Message):
+    await cmd_today(message)
+
+
+@dp.message(F.text == "📋 Полное расписание")
+async def btn_full(message: Message):
+    await cmd_full(message)
+
+
+@dp.message(F.text == "🟠 ВДА сегодня")
+async def btn_vda(message: Message):
+    await cmd_vda_today(message)
+
+
+@dp.message(F.text == "🔵 CoDA сегодня")
+async def btn_coda(message: Message):
+    await cmd_coda_today(message)
+
+
+@dp.message(F.text == "🟢 UAA сегодня")
+async def btn_uaa(message: Message):
+    await cmd_uaa_today(message)
+
+
+@dp.message(F.text == "🟡 АНЗ сегодня")
+async def btn_anz(message: Message):
+    await cmd_anz_today(message)
+
+
+@dp.message(F.text == "💫 Случайный девиз")
+async def btn_slogan(message: Message):
+    await cmd_slogan(message)
+
+
+@dp.message(F.text == "📆 Выбрать день")
+async def btn_choose_day(message: Message):
+    await message.answer(
+        "📆 Выбери день недели:",
+        reply_markup=get_days_keyboard(),
+    )
+
+
+@dp.callback_query(F.data.startswith("day_"))
+async def process_day_callback(callback: CallbackQuery):
+    await callback.answer()
+    day_index = int(callback.data.split("_")[1])
+    day_name, groups = ScheduleService.get_by_day(day_index)
+    
+    if groups:
+        text = format_groups(groups, f"📅 {day_name}:")
+    else:
+        text = f"📅 <b>{day_name}:</b>\n\n<i>В этот день групп нет.</i>"
+    
+    await send_long_message(callback.message, text)
+
+
+# ==================== ЗАПУСК ====================
+
 async def main():
+    if not BOT_TOKEN:
+        print("❌ Ошибка: BOT_TOKEN не задан")
+        return
+    
     bot = Bot(token=BOT_TOKEN)
+    print("✅ Бот запущен")
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
