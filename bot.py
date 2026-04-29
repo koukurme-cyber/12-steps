@@ -18,9 +18,11 @@ from aiogram.utils.keyboard import ReplyKeyboardBuilder
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# Московское время через UTC+3
 def moscow_now():
     return datetime.utcnow() + timedelta(hours=3)
+
+# Кэш для станций метро (чтобы callback_data была короткой)
+metro_stations_cache = []
 
 # ==================== РАСПИСАНИЕ (время, название, тип, метро, адрес) ====================
 SCHEDULE = {
@@ -286,12 +288,14 @@ def get_days_keyboard():
 
 
 def get_metro_inline_keyboard():
+    global metro_stations_cache
     stations = ScheduleService.get_all_metro_stations()
+    metro_stations_cache = stations  # сохраняем порядок
     buttons = []
     for i in range(0, len(stations), 2):
-        row = [InlineKeyboardButton(text=stations[i], callback_data=f"metro_{stations[i]}")]
+        row = [InlineKeyboardButton(text=stations[i], callback_data=f"metro_{i}")]
         if i + 1 < len(stations):
-            row.append(InlineKeyboardButton(text=stations[i + 1], callback_data=f"metro_{stations[i + 1]}"))
+            row.append(InlineKeyboardButton(text=stations[i + 1], callback_data=f"metro_{i + 1}"))
         buttons.append(row)
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -416,8 +420,13 @@ async def btn_metro_start(message: Message):
 @dp.callback_query(F.data.startswith("metro_"))
 async def inline_metro_callback(callback: CallbackQuery):
     await callback.answer()
-    station = callback.data[len("metro_"):]
-    await process_metro_search(callback.message, station)
+    idx_str = callback.data[len("metro_"):]
+    idx = int(idx_str)
+    if idx < len(metro_stations_cache):
+        station = metro_stations_cache[idx]
+        await process_metro_search(callback.message, station)
+    else:
+        await callback.message.answer("⚠️ Ошибка: станция не найдена.")
 
 
 # ==================== КНОПКИ МЕНЮ ====================
