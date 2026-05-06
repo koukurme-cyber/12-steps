@@ -2,7 +2,7 @@ import asyncio
 import os
 import random
 from datetime import datetime, timedelta
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -18,8 +18,10 @@ from aiogram.utils.keyboard import ReplyKeyboardBuilder
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
+
 def moscow_now():
     return datetime.utcnow() + timedelta(hours=3)
+
 
 metro_stations_cache = []
 
@@ -172,6 +174,13 @@ TYPE_EMOJI = {
     "АНЗ": "🟡",
 }
 
+TYPE_TITLES = {
+    "ВДА": "🟠 ВДА",
+    "CoDA": "🔵 CoDA",
+    "UAA": "🟢 UAA",
+    "АНЗ": "🟡 АНЗ",
+}
+
 
 def escape_html(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -180,29 +189,35 @@ def escape_html(text: str) -> str:
 def format_group(time: str, name: str, kind: str, metro: str, address: str) -> str:
     emoji = TYPE_EMOJI.get(kind, "⚪")
     safe_name = escape_html(name)
+    safe_kind = escape_html(kind)
     safe_addr = escape_html(address)
     metro_str = f"   🚇 {escape_html(metro)}\n" if metro else ""
-    return f"{emoji} <b>{time}</b> — {safe_name} [{kind}]\n{metro_str}   📍 {safe_addr}"
+    return f"{emoji} <b>{time}</b> — {safe_name} [{safe_kind}]\n{metro_str}   📍 {safe_addr}"
 
 
 def format_groups(groups: List[Tuple], title: str = "") -> str:
     if not groups:
-        return f"<i>{title}</i>\n\nГрупп не найдено."
-    lines = [f"<b>{title}</b>\n"] if title else []
+        return f"<b>{escape_html(title)}</b>\n\n<i>Групп не найдено.</i>" if title else "<i>Групп не найдено.</i>"
+
+    lines = [f"<b>{escape_html(title)}</b>\n"] if title else []
     lines.extend(format_group(*g) for g in groups)
     return "\n".join(lines)
 
 
 def split_long_message(text: str, limit: int = 3800) -> List[str]:
     parts = []
+
     while len(text) > limit:
         cut = text.rfind("\n", 0, limit)
         if cut == -1:
             cut = limit
+
         parts.append(text[:cut].strip())
         text = text[cut:].lstrip("\n")
+
     if text.strip():
         parts.append(text.strip())
+
     return parts
 
 
@@ -225,36 +240,58 @@ class ScheduleService:
         return "", []
 
     @staticmethod
-    def get_by_type(groups, kind):
+    def get_by_type(groups: List[Tuple], kind: str):
         return [g for g in groups if g[2].upper() == kind.upper()]
 
     @staticmethod
     def get_by_metro(metro_query: str):
         q = metro_query.lower().strip()
         result = []
+
         for day_idx, groups in SCHEDULE.items():
             filtered = [g for g in groups if q in g[3].lower()]
             if filtered:
                 result.append((day_idx, DAYS[day_idx], filtered))
+
         return result
 
     @staticmethod
     def get_all_metro_stations():
         stations = set()
+
         for groups in SCHEDULE.values():
             for g in groups:
                 if g[3]:
                     stations.add(g[3])
+
         return sorted(stations)
 
     @staticmethod
-    def get_full_schedule():
+    def get_full_schedule(kind: Optional[str] = None):
         parts = []
+
         for i, day_name in enumerate(DAYS):
-            entries = sorted(SCHEDULE[i], key=lambda x: x[0])
+            entries = sorted(SCHEDULE.get(i, []), key=lambda x: x[0])
+
+            if kind:
+                entries = ScheduleService.get_by_type(entries, kind)
+
             if entries:
                 parts.append(format_groups(entries, f"{day_name}:"))
+
+        if not parts:
+            if kind:
+                title = TYPE_TITLES.get(kind, kind)
+                return f"<b>{escape_html(title)} на неделю</b>\n\n<i>Групп не найдено.</i>"
+            return "<b>Полное расписание на неделю</b>\n\n<i>Групп не найдено.</i>"
+
         return "\n\n".join(parts)
+
+    @staticmethod
+    def get_week_title(kind: Optional[str] = None):
+        if kind:
+            return f"{TYPE_TITLES.get(kind, kind)} на неделю"
+        return "📋 Полное расписание на неделю"
 
 
 # ==================== КЛАВИАТУРЫ ====================
@@ -286,16 +323,40 @@ def get_days_keyboard():
     )
 
 
+def get_full_schedule_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📋 Вся неделя", callback_data="week_all"),
+            ],
+            [
+                InlineKeyboardButton(text="🟠 ВДА на неделю", callback_data="week_type:ВДА"),
+                InlineKeyboardButton(text="🔵 CoDA на неделю", callback_data="week_type:CoDA"),
+            ],
+            [
+                InlineKeyboardButton(text="🟢 UAA на неделю", callback_data="week_type:UAA"),
+                InlineKeyboardButton(text="🟡 АНЗ на неделю", callback_data="week_type:АНЗ"),
+            ],
+        ]
+    )
+
+
 def get_metro_inline_keyboard():
     global metro_stations_cache
+
     stations = ScheduleService.get_all_metro_stations()
-    metro_stations_cache = stations  # сохраняем порядок
+    metro_stations_cache = stations
+
     buttons = []
+
     for i in range(0, len(stations), 2):
         row = [InlineKeyboardButton(text=stations[i], callback_data=f"metro_{i}")]
+
         if i + 1 < len(stations):
             row.append(InlineKeyboardButton(text=stations[i + 1], callback_data=f"metro_{i + 1}"))
+
         buttons.append(row)
+
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -313,9 +374,10 @@ async def cmd_start(message: Message):
         parse_mode="HTML",
         reply_markup=get_menu_keyboard(),
     )
+
     await message.answer(
         "/today — группы на сегодня\n"
-        "/full — полное расписание\n"
+        "/full — выбрать недельное расписание\n"
         "/metro — поиск по станции метро\n"
         "/slogan — установка на день\n"
         "/help — помощь"
@@ -331,16 +393,20 @@ async def cmd_today(message: Message):
 
 @dp.message(Command("full"))
 async def cmd_full(message: Message):
-    text = "📋 <b>Полное расписание на неделю:</b>\n\n" + ScheduleService.get_full_schedule()
-    await send_long_message(message, text)
+    await message.answer(
+        "📋 <b>Выбери расписание:</b>",
+        parse_mode="HTML",
+        reply_markup=get_full_schedule_keyboard(),
+    )
 
 
 @dp.message(Command("slogan"))
 async def cmd_slogan(message: Message):
     slogan = random.choice(SLOGANS_AND_AFFIRMATIONS)
+
     await message.answer(
         f"💫 <b>Установка на день:</b>\n\n<i>«{escape_html(slogan)}»</i>",
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
 
 
@@ -349,17 +415,19 @@ async def cmd_help(message: Message):
     await message.answer(
         "📖 <b>Справка:</b>\n\n"
         "/today — группы на сегодня\n"
-        "/full — полное расписание\n"
+        "/full — выбрать недельное расписание\n"
         "/metro [станция] — поиск по метро\n"
         "/slogan — установка на день\n"
-        "/vda, /coda, /uaa, /anz — фильтры по типам\n\n"
+        "/vda, /coda, /uaa, /anz — фильтры по типам на сегодня\n\n"
+        "Кнопка «📋 Полное расписание» открывает второй уровень выбора:\n"
+        "вся неделя, ВДА на неделю, CoDA на неделю, UAA на неделю или АНЗ на неделю.\n\n"
         "Или используй кнопки меню.",
         parse_mode="HTML",
         reply_markup=get_menu_keyboard(),
     )
 
 
-# ==================== ФИЛЬТРЫ ПО ТИПАМ ====================
+# ==================== ФИЛЬТРЫ ПО ТИПАМ НА СЕГОДНЯ ====================
 @dp.message(Command("vda"))
 async def cmd_vda_today(message: Message):
     _, groups = ScheduleService.get_today()
@@ -392,35 +460,56 @@ async def cmd_anz_today(message: Message):
 @dp.message(Command("metro"))
 async def cmd_metro(message: Message):
     args = message.text.split(maxsplit=1)
+
     if len(args) < 2:
-        await message.answer("🚇 Выберите станцию метро из списка или введите /metro <название> вручную:",
-                             reply_markup=get_metro_inline_keyboard())
+        await message.answer(
+            "🚇 Выберите станцию метро из списка или введите /metro <название> вручную:",
+            reply_markup=get_metro_inline_keyboard(),
+        )
         return
+
     station = args[1]
     await process_metro_search(message, station)
 
 
 async def process_metro_search(message: Message, station: str):
     results = ScheduleService.get_by_metro(station)
+
     if not results:
-        await message.answer(f"🚇 По запросу «{escape_html(station)}» групп не найдено.")
+        await message.answer(
+            f"🚇 По запросу «{escape_html(station)}» групп не найдено.",
+            parse_mode="HTML",
+        )
         return
+
     answer = f"🚇 <b>Группы рядом со станцией метро «{escape_html(station)}»:</b>\n\n"
+
     for _, day_name, groups in results:
         answer += format_groups(groups, f"{day_name}:") + "\n\n"
+
     await send_long_message(message, answer.strip())
 
 
 @dp.message(F.text == "🚇 Поиск по метро")
 async def btn_metro_start(message: Message):
-    await message.answer("🚇 Выберите станцию метро из списка:", reply_markup=get_metro_inline_keyboard())
+    await message.answer(
+        "🚇 Выберите станцию метро из списка:",
+        reply_markup=get_metro_inline_keyboard(),
+    )
 
 
 @dp.callback_query(F.data.startswith("metro_"))
 async def inline_metro_callback(callback: CallbackQuery):
     await callback.answer()
+
     idx_str = callback.data[len("metro_"):]
+
+    if not idx_str.isdigit():
+        await callback.message.answer("⚠️ Ошибка: станция не найдена.")
+        return
+
     idx = int(idx_str)
+
     if idx < len(metro_stations_cache):
         station = metro_stations_cache[idx]
         await process_metro_search(callback.message, station)
@@ -469,12 +558,52 @@ async def btn_choose_day(message: Message):
     await message.answer("📆 Выбери день недели:", reply_markup=get_days_keyboard())
 
 
+# ==================== CALLBACK: ВЫБОР ДНЯ ====================
 @dp.callback_query(F.data.startswith("day_"))
 async def process_day_callback(callback: CallbackQuery):
     await callback.answer()
-    day_index = int(callback.data.split("_")[1])
+
+    day_index_str = callback.data.split("_", 1)[1]
+
+    if not day_index_str.isdigit():
+        await callback.message.answer("⚠️ Ошибка: день недели не найден.")
+        return
+
+    day_index = int(day_index_str)
     day_name, groups = ScheduleService.get_by_day(day_index)
-    text = format_groups(groups, f"📅 {day_name}:") if groups else f"📅 <b>{day_name}:</b>\n\n<i>В этот день групп нет.</i>"
+
+    if groups:
+        text = format_groups(groups, f"📅 {day_name}:")
+    else:
+        text = f"📅 <b>{escape_html(day_name)}:</b>\n\n<i>В этот день групп нет.</i>"
+
+    await send_long_message(callback.message, text)
+
+
+# ==================== CALLBACK: НЕДЕЛЬНОЕ РАСПИСАНИЕ ====================
+@dp.callback_query(F.data == "week_all")
+async def process_week_all_callback(callback: CallbackQuery):
+    await callback.answer()
+
+    title = ScheduleService.get_week_title()
+    text = f"<b>{escape_html(title)}</b>\n\n" + ScheduleService.get_full_schedule()
+    await send_long_message(callback.message, text)
+
+
+@dp.callback_query(F.data.startswith("week_type:"))
+async def process_week_type_callback(callback: CallbackQuery):
+    await callback.answer()
+
+    kind = callback.data.split(":", 1)[1]
+
+    if kind not in TYPE_TITLES:
+        await callback.message.answer("⚠️ Ошибка: тип групп не найден.")
+        return
+
+    title = ScheduleService.get_week_title(kind)
+    schedule_text = ScheduleService.get_full_schedule(kind)
+    text = f"<b>{escape_html(title)}</b>\n\n{schedule_text}"
+
     await send_long_message(callback.message, text)
 
 
@@ -483,7 +612,9 @@ async def main():
     if not BOT_TOKEN:
         print("❌ Ошибка: BOT_TOKEN не задан в переменных окружения")
         return
+
     bot = Bot(token=BOT_TOKEN)
+
     print("✅ Бот запущен")
     await dp.start_polling(bot)
 
