@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import random
 from datetime import datetime, timedelta
@@ -9,14 +10,19 @@ from aiogram.filters import Command
 from aiogram.types import (
     Message,
     CallbackQuery,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
 )
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
+from aiogram.types import KeyboardButton
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+SUBSCRIBERS_FILE = "subscribers.json"
+
+# Время ежедневной авторассылки по Москве
+DAILY_NOTIFY_HOUR = 9
+DAILY_NOTIFY_MINUTE = 0
 
 
 def moscow_now():
@@ -182,6 +188,41 @@ TYPE_TITLES = {
 }
 
 
+# ==================== ПОДПИСЧИКИ ДЛЯ АВТОРАССЫЛКИ ====================
+def load_subscribers() -> set[int]:
+    if not os.path.exists(SUBSCRIBERS_FILE):
+        return set()
+
+    try:
+        with open(SUBSCRIBERS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if not isinstance(data, list):
+            return set()
+
+        return {int(chat_id) for chat_id in data}
+    except Exception as e:
+        print(f"Ошибка чтения файла подписчиков: {e}")
+        return set()
+
+
+def save_subscribers(subscribers: set[int]) -> None:
+    try:
+        with open(SUBSCRIBERS_FILE, "w", encoding="utf-8") as f:
+            json.dump(sorted(list(subscribers)), f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Ошибка записи файла подписчиков: {e}")
+
+
+def add_subscriber(chat_id: int) -> None:
+    subscribers = load_subscribers()
+
+    if chat_id not in subscribers:
+        subscribers.add(chat_id)
+        save_subscribers(subscribers)
+
+
+# ==================== ФОРМАТИРОВАНИЕ ====================
 def escape_html(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -209,6 +250,7 @@ def split_long_message(text: str, limit: int = 3800) -> List[str]:
 
     while len(text) > limit:
         cut = text.rfind("\n", 0, limit)
+
         if cut == -1:
             cut = limit
 
@@ -224,6 +266,12 @@ def split_long_message(text: str, limit: int = 3800) -> List[str]:
 async def send_long_message(message: Message, text: str, parse_mode: str = "HTML"):
     for part in split_long_message(text):
         await message.answer(part, parse_mode=parse_mode)
+
+
+async def send_long_message_to_chat(bot: Bot, chat_id: int, text: str, parse_mode: str = "HTML"):
+    for part in split_long_message(text):
+        await bot.send_message(chat_id, part, parse_mode=parse_mode)
+        await asyncio.sleep(0.05)
 
 
 # ==================== БИЗНЕС-ЛОГИКА ====================
@@ -283,6 +331,7 @@ class ScheduleService:
             if kind:
                 title = TYPE_TITLES.get(kind, kind)
                 return f"<b>{escape_html(title)} на неделю</b>\n\n<i>Групп не найдено.</i>"
+
             return "<b>Полное расписание на неделю</b>\n\n<i>Групп не найдено.</i>"
 
         return "\n\n".join(parts)
@@ -292,6 +341,47 @@ class ScheduleService:
         if kind:
             return f"{TYPE_TITLES.get(kind, kind)} на неделю"
         return "📋 Полное расписание на неделю"
+
+
+def build_daily_live_groups_message() -> str:
+    day_name, groups = ScheduleService.get_today()
+
+    if not groups:
+        return f"Привет, живые группы сегодня ({escape_html(day_name)}) не найдены."
+
+    return (
+        f"Привет, живые группы сегодня ({escape_html(day_name)}):\n\n"
+        + format_groups(groups)
+    )
+
+
+# ==================== АВТОРАССЫЛКА ====================
+async def daily_notification_worker(bot: Bot):
+    last_sent_date = None
+
+    while True:
+        now = moscow_now()
+        today_key = now.strftime("%Y-%m-%d")
+
+        if (
+            now.hour == DAILY_NOTIFY_HOUR
+            and now.minute == DAILY_NOTIFY_MINUTE
+            and last_sent_date != today_key
+        ):
+            text = build_daily_live_groups_message()
+            subscribers = load_subscribers()
+
+            print(f"Запуск ежедневной рассылки: {today_key}, получателей: {len(subscribers)}")
+
+            for chat_id in subscribers:
+                try:
+                    await send_long_message_to_chat(bot, chat_id, text, parse_mode="HTML")
+                except Exception as e:
+                    print(f"Не удалось отправить уведомление chat_id={chat_id}: {e}")
+
+            last_sent_date = today_key
+
+        await asyncio.sleep(20)
 
 
 # ==================== КЛАВИАТУРЫ ====================
@@ -366,9 +456,12 @@ dp = Dispatcher()
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
+    add_subscriber(message.chat.id)
+
     await message.answer(
         "🕊 <b>Добро пожаловать в бот-помощник 12-шагового сообщества!</b>\n\n"
         "Здесь ты найдёшь расписание групп ВДА, CoDA, UAA и АНЗ в Санкт-Петербурге.\n\n"
+        "Каждый день бот будет автоматически отправлять живые группы на сегодня.\n\n"
         "<i>«Жизнь больше, чем просто выживание»</i>\n\n"
         "Выбери действие на клавиатуре или используй команды:",
         parse_mode="HTML",
@@ -421,7 +514,7 @@ async def cmd_help(message: Message):
         "/vda, /coda, /uaa, /anz — фильтры по типам на сегодня\n\n"
         "Кнопка «📋 Полное расписание» открывает второй уровень выбора:\n"
         "вся неделя, ВДА на неделю, CoDA на неделю, UAA на неделю или АНЗ на неделю.\n\n"
-        "Или используй кнопки меню.",
+        "Ежедневная рассылка включается автоматически после /start.",
         parse_mode="HTML",
         reply_markup=get_menu_keyboard(),
     )
@@ -616,6 +709,10 @@ async def main():
     bot = Bot(token=BOT_TOKEN)
 
     print("✅ Бот запущен")
+    print(f"✅ Ежедневная рассылка: {DAILY_NOTIFY_HOUR:02d}:{DAILY_NOTIFY_MINUTE:02d} МСК")
+
+    asyncio.create_task(daily_notification_worker(bot))
+
     await dp.start_polling(bot)
 
 
