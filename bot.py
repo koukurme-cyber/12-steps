@@ -320,6 +320,43 @@ def format_group_short(day_index: int, group_index: int, group: Tuple, show_day:
     return f"{emoji} <b>{day_part}{time_str}</b> — {escape_html(name)} [{escape_html(kind)}]{metro_part}"
 
 
+def format_week_schedule(items: List[Dict[str, Any]], title: str) -> str:
+    if not items:
+        return f"<b>{escape_html(title)}</b>\n\n<i>Групп не найдено.</i>"
+
+    by_day: Dict[int, List[Dict[str, Any]]] = {}
+
+    for item in items:
+        day_index = item["day_index"]
+        by_day.setdefault(day_index, []).append(item)
+
+    parts = [f"<b>{escape_html(title)}</b>"]
+
+    for day_index in range(7):
+        day_items = by_day.get(day_index, [])
+
+        if not day_items:
+            continue
+
+        parts.append(f"\n<b>{escape_html(DAYS[day_index])}</b>")
+
+        for item in sorted(day_items, key=lambda x: x["group"][0]):
+            time_str, name, kind, metro, _address = item["group"]
+            emoji = TYPE_EMOJI.get(kind, "⚪")
+            metro_part = f" · {escape_html(metro)}" if metro else ""
+
+            parts.append(
+                f"{emoji} <b>{escape_html(time_str)}</b> — "
+                f"{escape_html(name)} [{escape_html(kind)}]{metro_part}"
+            )
+
+    return "\n".join(parts)
+
+
+async def send_week_schedule_message(message: Message, items: List[Dict[str, Any]], title: str):
+    await send_long_message(message, format_week_schedule(items, title))
+
+
 def format_group_details(day_index: int, group_index: int, group: Tuple) -> str:
     time_str, name, kind, metro, address = group
     emoji = TYPE_EMOJI.get(kind, "⚪")
@@ -1025,11 +1062,10 @@ async def process_week_all_callback(callback: CallbackQuery):
     await callback.answer()
 
     items = ScheduleService.get_items_for_week()
-    await send_group_list_message(
+    await send_week_schedule_message(
         callback.message,
         items,
         ScheduleService.get_week_title(),
-        show_day=True,
     )
 
 
@@ -1044,11 +1080,10 @@ async def process_week_type_callback(callback: CallbackQuery):
         return
 
     items = ScheduleService.get_items_for_week(kind=kind)
-    await send_group_list_message(
+    await send_week_schedule_message(
         callback.message,
         items,
         ScheduleService.get_week_title(kind),
-        show_day=True,
     )
 
 
