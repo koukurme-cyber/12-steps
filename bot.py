@@ -3,7 +3,7 @@ import json
 import os
 import random
 from datetime import datetime, timedelta
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Any
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -12,9 +12,10 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    KeyboardButton,
 )
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
-from aiogram.types import KeyboardButton
+
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
@@ -24,12 +25,16 @@ SUBSCRIBERS_FILE = "subscribers.json"
 DAILY_NOTIFY_HOUR = 9
 DAILY_NOTIFY_MINUTE = 0
 
+# Сколько ближайших групп показывать
+NEAREST_LIMIT = 5
+
 
 def moscow_now():
     return datetime.utcnow() + timedelta(hours=3)
 
 
 metro_stations_cache = []
+
 
 # ==================== РАСПИСАНИЕ (время, название, тип, метро, адрес) ====================
 SCHEDULE = {
@@ -227,22 +232,84 @@ def escape_html(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def format_group(time: str, name: str, kind: str, metro: str, address: str) -> str:
+def get_group_key(day_index: int, group_index: int) -> str:
+    return f"{day_index}:{group_index}"
+
+
+def parse_group_key(group_key: str) -> Optional[Tuple[int, int]]:
+    try:
+        day_index_str, group_index_str = group_key.split(":", 1)
+        day_index = int(day_index_str)
+        group_index = int(group_index_str)
+
+        if day_index not in SCHEDULE:
+            return None
+
+        if group_index < 0 or group_index >= len(SCHEDULE[day_index]):
+            return None
+
+        return day_index, group_index
+    except Exception:
+        return None
+
+
+def get_group_by_key(group_key: str) -> Optional[Tuple[int, int, Tuple]]:
+    parsed = parse_group_key(group_key)
+
+    if not parsed:
+        return None
+
+    day_index, group_index = parsed
+    return day_index, group_index, SCHEDULE[day_index][group_index]
+
+
+def get_relative_day_label(group_dt: datetime) -> str:
+    now = moscow_now()
+    today = now.date()
+    group_date = group_dt.date()
+
+    if group_date == today:
+        return "Сегодня"
+
+    if group_date == today + timedelta(days=1):
+        return "Завтра"
+
+    return DAYS[group_dt.weekday()]
+
+
+def format_group_short(day_index: int, group_index: int, group: Tuple, show_day: bool = False) -> str:
+    time_str, name, kind, metro, _address = group
     emoji = TYPE_EMOJI.get(kind, "⚪")
-    safe_name = escape_html(name)
-    safe_kind = escape_html(kind)
-    safe_addr = escape_html(address)
+    day_part = f"{DAYS[day_index]}, " if show_day else ""
+    metro_part = f" · {escape_html(metro)}" if metro else ""
+    return f"{emoji} <b>{day_part}{time_str}</b> — {escape_html(name)} [{escape_html(kind)}]{metro_part}"
+
+
+def format_group_details(day_index: int, group_index: int, group: Tuple) -> str:
+    time_str, name, kind, metro, address = group
+    emoji = TYPE_EMOJI.get(kind, "⚪")
+
+    metro_line = f"\n🚇 <b>Метро:</b> {escape_html(metro)}" if metro else ""
+
+    return (
+        f"{emoji} <b>{escape_html(name)}</b>\n\n"
+        f"📅 <b>День:</b> {escape_html(DAYS[day_index])}\n"
+        f"🕒 <b>Время:</b> {escape_html(time_str)}\n"
+        f"👥 <b>Сообщество:</b> {escape_html(kind)}"
+        f"{metro_line}\n"
+        f"📍 <b>Адрес и пояснения:</b>\n{escape_html(address)}"
+    )
+
+
+def format_group_for_daily(time: str, name: str, kind: str, metro: str, address: str) -> str:
+    emoji = TYPE_EMOJI.get(kind, "⚪")
     metro_str = f"   🚇 {escape_html(metro)}\n" if metro else ""
-    return f"{emoji} <b>{time}</b> — {safe_name} [{safe_kind}]\n{metro_str}   📍 {safe_addr}"
 
-
-def format_groups(groups: List[Tuple], title: str = "") -> str:
-    if not groups:
-        return f"<b>{escape_html(title)}</b>\n\n<i>Групп не найдено.</i>" if title else "<i>Групп не найдено.</i>"
-
-    lines = [f"<b>{escape_html(title)}</b>\n"] if title else []
-    lines.extend(format_group(*g) for g in groups)
-    return "\n".join(lines)
+    return (
+        f"{emoji} <b>{escape_html(time)}</b> — {escape_html(name)} [{escape_html(kind)}]\n"
+        f"{metro_str}"
+        f"   📍 {escape_html(address)}"
+    )
 
 
 def split_long_message(text: str, limit: int = 3800) -> List[str]:
@@ -263,6 +330,45 @@ def split_long_message(text: str, limit: int = 3800) -> List[str]:
     return parts
 
 
+def build_details_keyboard(day_index: int, group_index: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Подробнее",
+                    callback_data=f"detail:{get_group_key(day_index, group_index)}",
+                )
+            ]
+        ]
+    )
+
+
+def build_group_list_keyboard(items: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
+    rows = []
+
+    for item in items:
+        day_index = item["day_index"]
+        group_index = item["group_index"]
+        group = item["group"]
+        time_str, name, kind, _metro, _address = group
+        emoji = TYPE_EMOJI.get(kind, "⚪")
+
+        button_text = f"{emoji} {DAYS[day_index][:2]} {time_str} · {name}"
+        if len(button_text) > 60:
+            button_text = button_text[:57] + "..."
+
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=button_text,
+                    callback_data=f"detail:{get_group_key(day_index, group_index)}",
+                )
+            ]
+        )
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 async def send_long_message(message: Message, text: str, parse_mode: str = "HTML"):
     for part in split_long_message(text):
         await message.answer(part, parse_mode=parse_mode)
@@ -274,12 +380,50 @@ async def send_long_message_to_chat(bot: Bot, chat_id: int, text: str, parse_mod
         await asyncio.sleep(0.05)
 
 
+async def send_group_list_message(
+    message: Message,
+    items: List[Dict[str, Any]],
+    title: str,
+    show_day: bool = False,
+):
+    if not items:
+        await message.answer(
+            f"<b>{escape_html(title)}</b>\n\n<i>Групп не найдено.</i>",
+            parse_mode="HTML",
+        )
+        return
+
+    lines = [f"<b>{escape_html(title)}</b>\n"]
+
+    for item in items:
+        lines.append(
+            format_group_short(
+                item["day_index"],
+                item["group_index"],
+                item["group"],
+                show_day=show_day,
+            )
+        )
+
+    text = "\n".join(lines)
+    keyboard = build_group_list_keyboard(items)
+
+    # Для коротких списков отправляем одним сообщением с кнопками подробностей.
+    # Для длинных списков Telegram может не принять слишком большую клавиатуру,
+    # поэтому текст уходит без кнопок; подробности остаются доступны в коротких режимах:
+    # "Сегодня", "Выбрать день", "Ближайшие", фильтры на сегодня.
+    if len(items) <= 25 and len(text) <= 3800:
+        await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+    else:
+        await send_long_message(message, text)
+
+
 # ==================== БИЗНЕС-ЛОГИКА ====================
 class ScheduleService:
     @staticmethod
     def get_today():
         day_index = moscow_now().weekday()
-        return DAYS[day_index], SCHEDULE.get(day_index, [])
+        return day_index, DAYS[day_index], SCHEDULE.get(day_index, [])
 
     @staticmethod
     def get_by_day(day_index: int):
@@ -288,18 +432,54 @@ class ScheduleService:
         return "", []
 
     @staticmethod
+    def get_items_for_day(day_index: int, kind: Optional[str] = None) -> List[Dict[str, Any]]:
+        items = []
+
+        if day_index not in SCHEDULE:
+            return items
+
+        for group_index, group in enumerate(SCHEDULE[day_index]):
+            if kind and group[2].upper() != kind.upper():
+                continue
+
+            items.append(
+                {
+                    "day_index": day_index,
+                    "group_index": group_index,
+                    "group": group,
+                }
+            )
+
+        return sorted(items, key=lambda x: x["group"][0])
+
+    @staticmethod
+    def get_items_for_week(kind: Optional[str] = None) -> List[Dict[str, Any]]:
+        items = []
+
+        for day_index in range(7):
+            items.extend(ScheduleService.get_items_for_day(day_index, kind=kind))
+
+        return items
+
+    @staticmethod
     def get_by_type(groups: List[Tuple], kind: str):
         return [g for g in groups if g[2].upper() == kind.upper()]
 
     @staticmethod
-    def get_by_metro(metro_query: str):
+    def get_by_metro(metro_query: str) -> List[Dict[str, Any]]:
         q = metro_query.lower().strip()
         result = []
 
-        for day_idx, groups in SCHEDULE.items():
-            filtered = [g for g in groups if q in g[3].lower()]
-            if filtered:
-                result.append((day_idx, DAYS[day_idx], filtered))
+        for day_index, groups in SCHEDULE.items():
+            for group_index, group in enumerate(groups):
+                if q in group[3].lower():
+                    result.append(
+                        {
+                            "day_index": day_index,
+                            "group_index": group_index,
+                            "group": group,
+                        }
+                    )
 
         return result
 
@@ -308,33 +488,49 @@ class ScheduleService:
         stations = set()
 
         for groups in SCHEDULE.values():
-            for g in groups:
-                if g[3]:
-                    stations.add(g[3])
+            for group in groups:
+                if group[3]:
+                    stations.add(group[3])
 
         return sorted(stations)
 
     @staticmethod
-    def get_full_schedule(kind: Optional[str] = None):
-        parts = []
+    def get_nearest_groups(kind: Optional[str] = None, limit: int = NEAREST_LIMIT) -> List[Dict[str, Any]]:
+        now = moscow_now()
+        result = []
 
-        for i, day_name in enumerate(DAYS):
-            entries = sorted(SCHEDULE.get(i, []), key=lambda x: x[0])
+        for day_offset in range(0, 8):
+            target_date = now.date() + timedelta(days=day_offset)
+            day_index = target_date.weekday()
+            groups = SCHEDULE.get(day_index, [])
 
-            if kind:
-                entries = ScheduleService.get_by_type(entries, kind)
+            for group_index, group in enumerate(groups):
+                time_str, _name, group_kind, _metro, _address = group
 
-            if entries:
-                parts.append(format_groups(entries, f"{day_name}:"))
+                if kind and group_kind.upper() != kind.upper():
+                    continue
 
-        if not parts:
-            if kind:
-                title = TYPE_TITLES.get(kind, kind)
-                return f"<b>{escape_html(title)} на неделю</b>\n\n<i>Групп не найдено.</i>"
+                hour, minute = map(int, time_str.split(":"))
+                group_dt = datetime(
+                    year=target_date.year,
+                    month=target_date.month,
+                    day=target_date.day,
+                    hour=hour,
+                    minute=minute,
+                )
 
-            return "<b>Полное расписание на неделю</b>\n\n<i>Групп не найдено.</i>"
+                if group_dt >= now:
+                    result.append(
+                        {
+                            "datetime": group_dt,
+                            "day_index": day_index,
+                            "group_index": group_index,
+                            "group": group,
+                        }
+                    )
 
-        return "\n\n".join(parts)
+        result.sort(key=lambda x: x["datetime"])
+        return result[:limit]
 
     @staticmethod
     def get_week_title(kind: Optional[str] = None):
@@ -344,15 +540,56 @@ class ScheduleService:
 
 
 def build_daily_live_groups_message() -> str:
-    day_name, groups = ScheduleService.get_today()
+    day_index, day_name, groups = ScheduleService.get_today()
 
     if not groups:
         return f"Привет, живые группы сегодня ({escape_html(day_name)}) не найдены."
 
-    return (
-        f"Привет, живые группы сегодня ({escape_html(day_name)}):\n\n"
-        + format_groups(groups)
-    )
+    lines = [f"Привет, живые группы сегодня ({escape_html(day_name)}):\n"]
+
+    for group in sorted(groups, key=lambda x: x[0]):
+        lines.append(format_group_for_daily(*group))
+
+    return "\n\n".join(lines)
+
+
+def format_nearest_groups(items: List[Dict[str, Any]], kind: Optional[str] = None) -> str:
+    if kind:
+        title = f"⏱ Ближайшие группы {TYPE_TITLES.get(kind, kind)}"
+    else:
+        title = "⏱ Ближайшие группы"
+
+    if not items:
+        return f"<b>{escape_html(title)}</b>\n\n<i>Ближайших групп не найдено.</i>"
+
+    lines = [f"<b>{escape_html(title)}</b>\n"]
+
+    for item in items:
+        group_dt = item["datetime"]
+        time_str, name, group_kind, metro, _address = item["group"]
+        day_label = get_relative_day_label(group_dt)
+        date_label = group_dt.strftime("%d.%m")
+        emoji = TYPE_EMOJI.get(group_kind, "⚪")
+        metro_part = f" · {escape_html(metro)}" if metro else ""
+
+        lines.append(
+            f"{emoji} <b>{day_label}, {date_label}, {time_str}</b> — "
+            f"{escape_html(name)} [{escape_html(group_kind)}]{metro_part}"
+        )
+
+    return "\n".join(lines)
+
+
+async def send_nearest_groups_message(message: Message, kind: Optional[str] = None):
+    items = ScheduleService.get_nearest_groups(kind=kind, limit=NEAREST_LIMIT)
+    text = format_nearest_groups(items, kind=kind)
+
+    if not items:
+        await message.answer(text, parse_mode="HTML")
+        return
+
+    keyboard = build_group_list_keyboard(items)
+    await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
 
 
 # ==================== АВТОРАССЫЛКА ====================
@@ -387,11 +624,11 @@ async def daily_notification_worker(bot: Bot):
 # ==================== КЛАВИАТУРЫ ====================
 def get_menu_keyboard():
     builder = ReplyKeyboardBuilder()
-    builder.row(KeyboardButton(text="📅 Сегодня"), KeyboardButton(text="📋 Полное расписание"))
+    builder.row(KeyboardButton(text="📅 Сегодня"), KeyboardButton(text="⏱ Ближайшие"))
+    builder.row(KeyboardButton(text="📋 Полное расписание"), KeyboardButton(text="📆 Выбрать день"))
     builder.row(KeyboardButton(text="🟠 ВДА сегодня"), KeyboardButton(text="🔵 CoDA сегодня"))
     builder.row(KeyboardButton(text="🟢 UAA сегодня"), KeyboardButton(text="🟡 АНЗ сегодня"))
     builder.row(KeyboardButton(text="🚇 Поиск по метро"), KeyboardButton(text="💫 Установка на день"))
-    builder.row(KeyboardButton(text="📆 Выбрать день"))
     return builder.as_markup(resize_keyboard=True)
 
 
@@ -431,6 +668,24 @@ def get_full_schedule_keyboard():
     )
 
 
+def get_nearest_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="⏱ Все ближайшие", callback_data="nearest_all"),
+            ],
+            [
+                InlineKeyboardButton(text="🟠 ВДА", callback_data="nearest_type:ВДА"),
+                InlineKeyboardButton(text="🔵 CoDA", callback_data="nearest_type:CoDA"),
+            ],
+            [
+                InlineKeyboardButton(text="🟢 UAA", callback_data="nearest_type:UAA"),
+                InlineKeyboardButton(text="🟡 АНЗ", callback_data="nearest_type:АНЗ"),
+            ],
+        ]
+    )
+
+
 def get_metro_inline_keyboard():
     global metro_stations_cache
 
@@ -459,17 +714,18 @@ async def cmd_start(message: Message):
     add_subscriber(message.chat.id)
 
     await message.answer(
-        "🕊 <b>Добро пожаловать в бот-помощник 12-шагового сообщества!</b>\n\n"
-        "Здесь ты найдёшь расписание групп ВДА, CoDA, UAA и АНЗ в Санкт-Петербурге.\n\n"
-        "Каждый день бот будет автоматически отправлять живые группы на сегодня.\n\n"
+        "🕊 <b>Бот расписания живых групп</b>\n\n"
+        "Здесь есть расписание групп ВДА, CoDA, UAA и АНЗ в Санкт-Петербурге.\n\n"
+        "Каждый день бот автоматически отправляет живые группы на сегодня.\n\n"
         "<i>«Жизнь больше, чем просто выживание»</i>\n\n"
-        "Выбери действие на клавиатуре или используй команды:",
+        "Выбери действие на клавиатуре:",
         parse_mode="HTML",
         reply_markup=get_menu_keyboard(),
     )
 
     await message.answer(
         "/today — группы на сегодня\n"
+        "/nearest — ближайшие 5 групп\n"
         "/full — выбрать недельное расписание\n"
         "/metro — поиск по станции метро\n"
         "/slogan — установка на день\n"
@@ -479,9 +735,18 @@ async def cmd_start(message: Message):
 
 @dp.message(Command("today"))
 async def cmd_today(message: Message):
-    day_name, groups = ScheduleService.get_today()
-    text = format_groups(groups, f"📅 Группы на сегодня ({day_name}):")
-    await send_long_message(message, text)
+    day_index, day_name, _groups = ScheduleService.get_today()
+    items = ScheduleService.get_items_for_day(day_index)
+    await send_group_list_message(message, items, f"📅 Группы на сегодня ({day_name}):")
+
+
+@dp.message(Command("nearest"))
+async def cmd_nearest(message: Message):
+    await message.answer(
+        "⏱ <b>Какие ближайшие группы показать?</b>",
+        parse_mode="HTML",
+        reply_markup=get_nearest_keyboard(),
+    )
 
 
 @dp.message(Command("full"))
@@ -508,11 +773,15 @@ async def cmd_help(message: Message):
     await message.answer(
         "📖 <b>Справка:</b>\n\n"
         "/today — группы на сегодня\n"
+        "/nearest — ближайшие 5 групп\n"
         "/full — выбрать недельное расписание\n"
         "/metro [станция] — поиск по метро\n"
         "/slogan — установка на день\n"
         "/vda, /coda, /uaa, /anz — фильтры по типам на сегодня\n\n"
-        "Кнопка «📋 Полное расписание» открывает второй уровень выбора:\n"
+        "Короткие списки показываются без длинных адресов. "
+        "Чтобы открыть адрес и пояснения, нажми кнопку с нужной группой под списком.\n\n"
+        "Кнопка «⏱ Ближайшие» показывает до 5 ближайших групп: все, ВДА, CoDA, UAA или АНЗ.\n\n"
+        "Кнопка «📋 Полное расписание» открывает второй уровень выбора: "
         "вся неделя, ВДА на неделю, CoDA на неделю, UAA на неделю или АНЗ на неделю.\n\n"
         "Ежедневная рассылка включается автоматически после /start.",
         parse_mode="HTML",
@@ -523,30 +792,30 @@ async def cmd_help(message: Message):
 # ==================== ФИЛЬТРЫ ПО ТИПАМ НА СЕГОДНЯ ====================
 @dp.message(Command("vda"))
 async def cmd_vda_today(message: Message):
-    _, groups = ScheduleService.get_today()
-    filtered = ScheduleService.get_by_type(groups, "ВДА")
-    await send_long_message(message, format_groups(filtered, "🟠 Группы ВДА сегодня:"))
+    day_index, day_name, _groups = ScheduleService.get_today()
+    items = ScheduleService.get_items_for_day(day_index, kind="ВДА")
+    await send_group_list_message(message, items, f"🟠 Группы ВДА сегодня ({day_name}):")
 
 
 @dp.message(Command("coda"))
 async def cmd_coda_today(message: Message):
-    _, groups = ScheduleService.get_today()
-    filtered = ScheduleService.get_by_type(groups, "CoDA")
-    await send_long_message(message, format_groups(filtered, "🔵 Группы CoDA сегодня:"))
+    day_index, day_name, _groups = ScheduleService.get_today()
+    items = ScheduleService.get_items_for_day(day_index, kind="CoDA")
+    await send_group_list_message(message, items, f"🔵 Группы CoDA сегодня ({day_name}):")
 
 
 @dp.message(Command("uaa"))
 async def cmd_uaa_today(message: Message):
-    _, groups = ScheduleService.get_today()
-    filtered = ScheduleService.get_by_type(groups, "UAA")
-    await send_long_message(message, format_groups(filtered, "🟢 Группы UAA сегодня:"))
+    day_index, day_name, _groups = ScheduleService.get_today()
+    items = ScheduleService.get_items_for_day(day_index, kind="UAA")
+    await send_group_list_message(message, items, f"🟢 Группы UAA сегодня ({day_name}):")
 
 
 @dp.message(Command("anz"))
 async def cmd_anz_today(message: Message):
-    _, groups = ScheduleService.get_today()
-    filtered = ScheduleService.get_by_type(groups, "АНЗ")
-    await send_long_message(message, format_groups(filtered, "🟡 Группы АНЗ сегодня:"))
+    day_index, day_name, _groups = ScheduleService.get_today()
+    items = ScheduleService.get_items_for_day(day_index, kind="АНЗ")
+    await send_group_list_message(message, items, f"🟡 Группы АНЗ сегодня ({day_name}):")
 
 
 # ==================== ПОИСК ПО МЕТРО ====================
@@ -566,21 +835,21 @@ async def cmd_metro(message: Message):
 
 
 async def process_metro_search(message: Message, station: str):
-    results = ScheduleService.get_by_metro(station)
+    items = ScheduleService.get_by_metro(station)
 
-    if not results:
+    if not items:
         await message.answer(
             f"🚇 По запросу «{escape_html(station)}» групп не найдено.",
             parse_mode="HTML",
         )
         return
 
-    answer = f"🚇 <b>Группы рядом со станцией метро «{escape_html(station)}»:</b>\n\n"
-
-    for _, day_name, groups in results:
-        answer += format_groups(groups, f"{day_name}:") + "\n\n"
-
-    await send_long_message(message, answer.strip())
+    await send_group_list_message(
+        message,
+        items,
+        f"🚇 Группы рядом со станцией метро «{station}»:",
+        show_day=True,
+    )
 
 
 @dp.message(F.text == "🚇 Поиск по метро")
@@ -614,6 +883,11 @@ async def inline_metro_callback(callback: CallbackQuery):
 @dp.message(F.text == "📅 Сегодня")
 async def btn_today(message: Message):
     await cmd_today(message)
+
+
+@dp.message(F.text == "⏱ Ближайшие")
+async def btn_nearest(message: Message):
+    await cmd_nearest(message)
 
 
 @dp.message(F.text == "📋 Полное расписание")
@@ -663,14 +937,10 @@ async def process_day_callback(callback: CallbackQuery):
         return
 
     day_index = int(day_index_str)
-    day_name, groups = ScheduleService.get_by_day(day_index)
+    day_name, _groups = ScheduleService.get_by_day(day_index)
+    items = ScheduleService.get_items_for_day(day_index)
 
-    if groups:
-        text = format_groups(groups, f"📅 {day_name}:")
-    else:
-        text = f"📅 <b>{escape_html(day_name)}:</b>\n\n<i>В этот день групп нет.</i>"
-
-    await send_long_message(callback.message, text)
+    await send_group_list_message(callback.message, items, f"📅 {day_name}:")
 
 
 # ==================== CALLBACK: НЕДЕЛЬНОЕ РАСПИСАНИЕ ====================
@@ -678,9 +948,13 @@ async def process_day_callback(callback: CallbackQuery):
 async def process_week_all_callback(callback: CallbackQuery):
     await callback.answer()
 
-    title = ScheduleService.get_week_title()
-    text = f"<b>{escape_html(title)}</b>\n\n" + ScheduleService.get_full_schedule()
-    await send_long_message(callback.message, text)
+    items = ScheduleService.get_items_for_week()
+    await send_group_list_message(
+        callback.message,
+        items,
+        ScheduleService.get_week_title(),
+        show_day=True,
+    )
 
 
 @dp.callback_query(F.data.startswith("week_type:"))
@@ -693,11 +967,51 @@ async def process_week_type_callback(callback: CallbackQuery):
         await callback.message.answer("⚠️ Ошибка: тип групп не найден.")
         return
 
-    title = ScheduleService.get_week_title(kind)
-    schedule_text = ScheduleService.get_full_schedule(kind)
-    text = f"<b>{escape_html(title)}</b>\n\n{schedule_text}"
+    items = ScheduleService.get_items_for_week(kind=kind)
+    await send_group_list_message(
+        callback.message,
+        items,
+        ScheduleService.get_week_title(kind),
+        show_day=True,
+    )
 
-    await send_long_message(callback.message, text)
+
+# ==================== CALLBACK: БЛИЖАЙШИЕ ГРУППЫ ====================
+@dp.callback_query(F.data == "nearest_all")
+async def process_nearest_all_callback(callback: CallbackQuery):
+    await callback.answer()
+    await send_nearest_groups_message(callback.message, kind=None)
+
+
+@dp.callback_query(F.data.startswith("nearest_type:"))
+async def process_nearest_type_callback(callback: CallbackQuery):
+    await callback.answer()
+
+    kind = callback.data.split(":", 1)[1]
+
+    if kind not in TYPE_TITLES:
+        await callback.message.answer("⚠️ Ошибка: тип групп не найден.")
+        return
+
+    await send_nearest_groups_message(callback.message, kind=kind)
+
+
+# ==================== CALLBACK: ПОДРОБНОСТИ ГРУППЫ ====================
+@dp.callback_query(F.data.startswith("detail:"))
+async def process_group_detail_callback(callback: CallbackQuery):
+    await callback.answer()
+
+    group_key = callback.data.split(":", 1)[1]
+    result = get_group_by_key(group_key)
+
+    if not result:
+        await callback.message.answer("⚠️ Ошибка: группа не найдена.")
+        return
+
+    day_index, group_index, group = result
+    text = format_group_details(day_index, group_index, group)
+
+    await callback.message.answer(text, parse_mode="HTML")
 
 
 # ==================== ЗАПУСК ====================
