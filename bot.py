@@ -35,6 +35,9 @@ def moscow_now():
 
 metro_stations_cache = []
 
+VIEW_CONTEXTS: Dict[str, Dict[str, Any]] = {}
+VIEW_COUNTER = 0
+
 
 # ==================== РАСПИСАНИЕ (время, название, тип, метро, адрес) ====================
 SCHEDULE = {
@@ -253,6 +256,38 @@ def parse_group_key(group_key: str) -> Optional[Tuple[int, int]]:
         return None
 
 
+def create_view_context(
+    items: List[Dict[str, Any]],
+    title: str,
+    show_day: bool = False,
+    nearest_mode: bool = False,
+) -> str:
+    global VIEW_COUNTER
+
+    VIEW_COUNTER += 1
+    view_id = str(VIEW_COUNTER)
+
+    VIEW_CONTEXTS[view_id] = {
+        "items": items,
+        "title": title,
+        "show_day": show_day,
+        "nearest_mode": nearest_mode,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+
+    # Простая защита от бесконечного роста памяти.
+    if len(VIEW_CONTEXTS) > 200:
+        oldest_keys = list(VIEW_CONTEXTS.keys())[:100]
+        for key in oldest_keys:
+            VIEW_CONTEXTS.pop(key, None)
+
+    return view_id
+
+
+def get_view_context(view_id: str) -> Optional[Dict[str, Any]]:
+    return VIEW_CONTEXTS.get(view_id)
+
+
 def get_group_by_key(group_key: str) -> Optional[Tuple[int, int, Tuple]]:
     parsed = parse_group_key(group_key)
 
@@ -343,7 +378,12 @@ def build_details_keyboard(day_index: int, group_index: int) -> InlineKeyboardMa
     )
 
 
-def build_group_choice_keyboard(items: List[Dict[str, Any]], show_day: bool = False, nearest_mode: bool = False) -> InlineKeyboardMarkup:
+def build_group_choice_keyboard(
+    items: List[Dict[str, Any]],
+    view_id: str,
+    show_day: bool = False,
+    nearest_mode: bool = False,
+) -> InlineKeyboardMarkup:
     rows = []
 
     for item in items:
@@ -372,12 +412,25 @@ def build_group_choice_keyboard(items: List[Dict[str, Any]], show_day: bool = Fa
             [
                 InlineKeyboardButton(
                     text=button_text,
-                    callback_data=f"detail:{get_group_key(day_index, group_index)}",
+                    callback_data=f"detail:{view_id}:{get_group_key(day_index, group_index)}",
                 )
             ]
         )
 
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_back_to_list_keyboard(view_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="← Назад к списку",
+                    callback_data=f"back:{view_id}",
+                )
+            ]
+        ]
+    )
 
 
 async def send_long_message(message: Message, text: str, parse_mode: str = "HTML"):
@@ -389,6 +442,10 @@ async def send_long_message_to_chat(bot: Bot, chat_id: int, text: str, parse_mod
     for part in split_long_message(text):
         await bot.send_message(chat_id, part, parse_mode=parse_mode)
         await asyncio.sleep(0.05)
+
+
+def render_group_list_text(title: str) -> str:
+    return f"<b>{escape_html(title)}</b>\n\nВыбери группу, чтобы открыть адрес и пояснения:"
 
 
 async def send_group_list_message(
@@ -405,10 +462,22 @@ async def send_group_list_message(
         return
 
     if len(items) <= 60:
+        view_id = create_view_context(
+            items=items,
+            title=title,
+            show_day=show_day,
+            nearest_mode=False,
+        )
+
         await message.answer(
-            f"<b>{escape_html(title)}</b>\n\nВыбери группу, чтобы открыть адрес и пояснения:",
+            render_group_list_text(title),
             parse_mode="HTML",
-            reply_markup=build_group_choice_keyboard(items, show_day=show_day),
+            reply_markup=build_group_choice_keyboard(
+                items,
+                view_id=view_id,
+                show_day=show_day,
+                nearest_mode=False,
+            ),
         )
         return
 
@@ -583,7 +652,19 @@ async def send_nearest_groups_message(message: Message, kind: Optional[str] = No
         await message.answer(text, parse_mode="HTML")
         return
 
-    keyboard = build_group_choice_keyboard(items, nearest_mode=True)
+    title = f"⏱ Ближайшие группы {TYPE_TITLES.get(kind, kind)}" if kind else "⏱ Ближайшие группы"
+    view_id = create_view_context(
+        items=items,
+        title=title,
+        show_day=False,
+        nearest_mode=True,
+    )
+
+    keyboard = build_group_choice_keyboard(
+        items,
+        view_id=view_id,
+        nearest_mode=True,
+    )
     await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
 
 
@@ -996,7 +1077,14 @@ async def process_nearest_type_callback(callback: CallbackQuery):
 async def process_group_detail_callback(callback: CallbackQuery):
     await callback.answer()
 
-    group_key = callback.data.split(":", 1)[1]
+    parts = callback.data.split(":", 3)
+
+    if len(parts) != 4:
+        await callback.message.answer("⚠️ Ошибка: группа не найдена.")
+        return
+
+    _prefix, view_id, day_index_str, group_index_str = parts
+    group_key = f"{day_index_str}:{group_index_str}"
     result = get_group_by_key(group_key)
 
     if not result:
@@ -1006,7 +1094,58 @@ async def process_group_detail_callback(callback: CallbackQuery):
     day_index, group_index, group = result
     text = format_group_details(day_index, group_index, group)
 
-    await callback.message.answer(text, parse_mode="HTML")
+    try:
+        await callback.message.edit_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=build_back_to_list_keyboard(view_id),
+        )
+    except Exception:
+        await callback.message.answer(
+            text,
+            parse_mode="HTML",
+            reply_markup=build_back_to_list_keyboard(view_id),
+        )
+
+
+@dp.callback_query(F.data.startswith("back:"))
+async def process_back_to_list_callback(callback: CallbackQuery):
+    await callback.answer()
+
+    view_id = callback.data.split(":", 1)[1]
+    context = get_view_context(view_id)
+
+    if not context:
+        await callback.message.answer("⚠️ Список устарел. Открой его заново.")
+        return
+
+    items = context["items"]
+    title = context["title"]
+    show_day = context["show_day"]
+    nearest_mode = context["nearest_mode"]
+
+    try:
+        await callback.message.edit_text(
+            render_group_list_text(title),
+            parse_mode="HTML",
+            reply_markup=build_group_choice_keyboard(
+                items,
+                view_id=view_id,
+                show_day=show_day,
+                nearest_mode=nearest_mode,
+            ),
+        )
+    except Exception:
+        await callback.message.answer(
+            render_group_list_text(title),
+            parse_mode="HTML",
+            reply_markup=build_group_choice_keyboard(
+                items,
+                view_id=view_id,
+                show_day=show_day,
+                nearest_mode=nearest_mode,
+            ),
+        )
 
 
 # ==================== ЗАПУСК ====================
