@@ -399,18 +399,14 @@ async def send_group_list_message(
 ):
     if not items:
         await message.answer(
-            f"<b>{escape_html(title)}</b>
-
-<i>Групп не найдено.</i>",
+            f"<b>{escape_html(title)}</b>\n\n<i>Групп не найдено.</i>",
             parse_mode="HTML",
         )
         return
 
     if len(items) <= 60:
         await message.answer(
-            f"<b>{escape_html(title)}</b>
-
-Выбери группу, чтобы открыть адрес и пояснения:",
+            f"<b>{escape_html(title)}</b>\n\nВыбери группу, чтобы открыть адрес и пояснения:",
             parse_mode="HTML",
             reply_markup=build_group_choice_keyboard(items, show_day=show_day),
         )
@@ -418,8 +414,7 @@ async def send_group_list_message(
 
     # Защита на случай чрезмерно длинного списка: Telegram ограничивает размер inline-клавиатуры.
     # В обычном расписании этого лимита не будет, но лучше оставить безопасный fallback.
-    lines = [f"<b>{escape_html(title)}</b>
-"]
+    lines = [f"<b>{escape_html(title)}</b>\\n"]
     for item in items:
         lines.append(
             format_group_short(
@@ -430,8 +425,7 @@ async def send_group_list_message(
             )
         )
 
-    await send_long_message(message, "
-".join(lines))
+    await send_long_message(message, "\\n".join(lines))
 
 
 # ==================== БИЗНЕС-ЛОГИКА ====================
@@ -576,13 +570,9 @@ def format_nearest_groups(items: List[Dict[str, Any]], kind: Optional[str] = Non
         title = "⏱ Ближайшие группы"
 
     if not items:
-        return f"<b>{escape_html(title)}</b>
+        return f"<b>{escape_html(title)}</b>\n\n<i>Ближайших групп не найдено.</i>"
 
-<i>Ближайших групп не найдено.</i>"
-
-    return f"<b>{escape_html(title)}</b>
-
-Выбери группу, чтобы открыть адрес и пояснения:"
+    return f"<b>{escape_html(title)}</b>\n\nВыбери группу, чтобы открыть адрес и пояснения:"
 
 
 async def send_nearest_groups_message(message: Message, kind: Optional[str] = None):
