@@ -343,19 +343,30 @@ def build_details_keyboard(day_index: int, group_index: int) -> InlineKeyboardMa
     )
 
 
-def build_group_list_keyboard(items: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
+def build_group_choice_keyboard(items: List[Dict[str, Any]], show_day: bool = False, nearest_mode: bool = False) -> InlineKeyboardMarkup:
     rows = []
 
     for item in items:
         day_index = item["day_index"]
         group_index = item["group_index"]
         group = item["group"]
-        time_str, name, kind, _metro, _address = group
+        time_str, name, kind, metro, _address = group
         emoji = TYPE_EMOJI.get(kind, "⚪")
 
-        button_text = f"{emoji} {DAYS[day_index][:2]} {time_str} · {name}"
-        if len(button_text) > 60:
-            button_text = button_text[:57] + "..."
+        if nearest_mode and "datetime" in item:
+            group_dt = item["datetime"]
+            day_label = get_relative_day_label(group_dt)
+            prefix = f"{day_label}, {time_str}"
+        elif show_day:
+            prefix = f"{DAYS[day_index][:2]}, {time_str}"
+        else:
+            prefix = time_str
+
+        metro_part = f" · {metro.replace('м. ', '')}" if metro else ""
+        button_text = f"{emoji} {prefix} · {name} [{kind}]{metro_part}"
+
+        if len(button_text) > 64:
+            button_text = button_text[:61] + "..."
 
         rows.append(
             [
@@ -388,13 +399,27 @@ async def send_group_list_message(
 ):
     if not items:
         await message.answer(
-            f"<b>{escape_html(title)}</b>\n\n<i>Групп не найдено.</i>",
+            f"<b>{escape_html(title)}</b>
+
+<i>Групп не найдено.</i>",
             parse_mode="HTML",
         )
         return
 
-    lines = [f"<b>{escape_html(title)}</b>\n"]
+    if len(items) <= 60:
+        await message.answer(
+            f"<b>{escape_html(title)}</b>
 
+Выбери группу, чтобы открыть адрес и пояснения:",
+            parse_mode="HTML",
+            reply_markup=build_group_choice_keyboard(items, show_day=show_day),
+        )
+        return
+
+    # Защита на случай чрезмерно длинного списка: Telegram ограничивает размер inline-клавиатуры.
+    # В обычном расписании этого лимита не будет, но лучше оставить безопасный fallback.
+    lines = [f"<b>{escape_html(title)}</b>
+"]
     for item in items:
         lines.append(
             format_group_short(
@@ -405,17 +430,8 @@ async def send_group_list_message(
             )
         )
 
-    text = "\n".join(lines)
-    keyboard = build_group_list_keyboard(items)
-
-    # Для коротких списков отправляем одним сообщением с кнопками подробностей.
-    # Для длинных списков Telegram может не принять слишком большую клавиатуру,
-    # поэтому текст уходит без кнопок; подробности остаются доступны в коротких режимах:
-    # "Сегодня", "Выбрать день", "Ближайшие", фильтры на сегодня.
-    if len(items) <= 25 and len(text) <= 3800:
-        await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
-    else:
-        await send_long_message(message, text)
+    await send_long_message(message, "
+".join(lines))
 
 
 # ==================== БИЗНЕС-ЛОГИКА ====================
@@ -560,24 +576,13 @@ def format_nearest_groups(items: List[Dict[str, Any]], kind: Optional[str] = Non
         title = "⏱ Ближайшие группы"
 
     if not items:
-        return f"<b>{escape_html(title)}</b>\n\n<i>Ближайших групп не найдено.</i>"
+        return f"<b>{escape_html(title)}</b>
 
-    lines = [f"<b>{escape_html(title)}</b>\n"]
+<i>Ближайших групп не найдено.</i>"
 
-    for item in items:
-        group_dt = item["datetime"]
-        time_str, name, group_kind, metro, _address = item["group"]
-        day_label = get_relative_day_label(group_dt)
-        date_label = group_dt.strftime("%d.%m")
-        emoji = TYPE_EMOJI.get(group_kind, "⚪")
-        metro_part = f" · {escape_html(metro)}" if metro else ""
+    return f"<b>{escape_html(title)}</b>
 
-        lines.append(
-            f"{emoji} <b>{day_label}, {date_label}, {time_str}</b> — "
-            f"{escape_html(name)} [{escape_html(group_kind)}]{metro_part}"
-        )
-
-    return "\n".join(lines)
+Выбери группу, чтобы открыть адрес и пояснения:"
 
 
 async def send_nearest_groups_message(message: Message, kind: Optional[str] = None):
@@ -588,7 +593,7 @@ async def send_nearest_groups_message(message: Message, kind: Optional[str] = No
         await message.answer(text, parse_mode="HTML")
         return
 
-    keyboard = build_group_list_keyboard(items)
+    keyboard = build_group_choice_keyboard(items, nearest_mode=True)
     await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
 
 
