@@ -660,12 +660,9 @@ dp = Dispatcher()
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
-    add_subscriber(message.chat.id)
-
     await message.answer(
         "🕊 <b>Бот расписания живых групп</b>\n\n"
         "Здесь есть расписание групп ВДА, CoDA, UAA и АНЗ в Санкт-Петербурге.\n\n"
-        "Каждый день бот автоматически отправляет живые группы на сегодня.\n\n"
         "<i>«Жизнь больше, чем просто выживание»</i>\n\n"
         "Выбери действие на клавиатуре:",
         parse_mode="HTML",
@@ -707,8 +704,7 @@ async def cmd_help(message: Message):
         "Используй кнопки меню: сегодня, выбор дня, полное расписание, "
         "фильтры по сообществам и установка на день.\n\n"
         "Короткие списки показываются без длинных адресов. "
-        "Чтобы открыть адрес и пояснения, нажми кнопку с нужной группой под списком.\n\n"
-        "Ежедневная рассылка включается автоматически после /start.",
+        "Чтобы открыть адрес и пояснения, нажми кнопку с нужной группой под списком.",
         parse_mode="HTML",
         reply_markup=get_menu_keyboard(),
     )
@@ -915,9 +911,6 @@ async def main():
     bot = Bot(token=BOT_TOKEN)
 
     print("✅ Бот запущен")
-    print(f"✅ Ежедневная рассылка: {DAILY_NOTIFY_HOUR:02d}:{DAILY_NOTIFY_MINUTE:02d} МСК")
-
-    asyncio.create_task(daily_notification_worker(bot))
 
     await dp.start_polling(bot)
 
