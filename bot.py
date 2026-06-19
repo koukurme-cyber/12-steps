@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import random
+import re
 from datetime import datetime, timedelta
 from typing import List, Tuple, Optional, Dict, Any
 
@@ -302,11 +303,80 @@ def get_group_by_key(group_key: str) -> Optional[Tuple[int, int, Tuple]]:
 
 
 
-def format_group_short(day_index: int, group_index: int, group: Tuple, show_day: bool = False) -> str:
-    time_str, name, kind, metro, _address = group
+def clean_schedule_address(metro: str, address: str) -> str:
+    """Оставляет для вывода только адресную часть без времени, тем, контактов и примечаний."""
+    metro = str(metro or "").strip()
+    address = str(address or "").strip()
+
+    if metro and address:
+        text = f"{metro}. {address}"
+    else:
+        text = address or metro
+
+    text = re.sub(r"\s+", " ", text).strip()
+
+    # Время, контакты, ссылки и служебные пояснения не выводим в списке расписания.
+    stop_patterns = [
+        r"\bВремя\s*:",
+        r"\bТелефон\b",
+        r"\bКонтакты?\b",
+        r"\bКонт\.\s*номер\b",
+        r"\+\s*7\b",
+        r"\b8\s*\(?\d{3}\)?",
+        r"https?://",
+        r"\bt\.me/",
+        r"\bvk\.(?:com|ru)/",
+        r"chat\.whatsapp\.com/",
+        r"\bРабочее собрание\b",
+        r"\bДень рождения\b",
+        r"\bЖенская группа\b",
+        r"\bОткрытый интенсив\b",
+        r"\bПриглашаются\b",
+        r"\bВажно\b",
+        r"\bПеред приходом\b",
+        r"\bВстречи открыты\b",
+        r"\bГруппа ориентирована\b",
+        r"\bкак пройти\b",
+        r"\bВозможны спонтанные собрания\b",
+        r"\bСсылка для подключения\b",
+    ]
+
+    cut_positions = []
+    for pattern in stop_patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            cut_positions.append(match.start())
+
+    if cut_positions:
+        text = text[:min(cut_positions)]
+
+    text = re.sub(r"\s+", " ", text).strip(" .;,—-")
+    return text or "адрес уточняется"
+
+
+def format_schedule_item(day_index: int, group: Tuple, show_day: bool = False) -> str:
+    time_str, name, kind, metro, address = group
     day_part = f"{DAYS[day_index]}, " if show_day else ""
-    metro_part = f" · {escape_html(metro)}" if metro else ""
-    return f"{type_prefix(kind)}<b>{day_part}{time_str}</b> — {escape_html(name)} [{escape_html(kind)}]{metro_part}"
+    clean_address = clean_schedule_address(metro, address)
+    return (
+        f"• <b>{escape_html(day_part + time_str)}</b> — "
+        f"{escape_html(name)} [{escape_html(kind)}]\n"
+        f"  {escape_html(clean_address)}"
+    )
+
+
+def format_group_short(day_index: int, group_index: int, group: Tuple, show_day: bool = False) -> str:
+    return format_schedule_item(day_index, group, show_day=show_day)
+
+
+def format_schedule_list(items: List[Dict[str, Any]], title: str, show_day: bool = False) -> str:
+    if not items:
+        return f"<b>{escape_html(title)}</b>\n\n<i>Групп не найдено.</i>"
+
+    lines = [f"<b>{escape_html(title)}</b>"]
+    for item in sorted(items, key=lambda x: (x["day_index"], x["group"][0], x["group"][1])):
+        lines.append(format_schedule_item(item["day_index"], item["group"], show_day=show_day))
+    return "\n\n".join(lines)
 
 
 def format_week_schedule(items: List[Dict[str, Any]], title: str) -> str:
@@ -329,14 +399,8 @@ def format_week_schedule(items: List[Dict[str, Any]], title: str) -> str:
 
         parts.append(f"\n<b>{escape_html(DAYS[day_index])}</b>")
 
-        for item in sorted(day_items, key=lambda x: x["group"][0]):
-            time_str, name, kind, metro, _address = item["group"]
-            metro_part = f" · {escape_html(metro)}" if metro else ""
-
-            parts.append(
-                f"{type_prefix(kind)}<b>{escape_html(time_str)}</b> — "
-                f"{escape_html(name)} [{escape_html(kind)}]{metro_part}"
-            )
+        for item in sorted(day_items, key=lambda x: (x["group"][0], x["group"][1])):
+            parts.append(format_schedule_item(day_index, item["group"]))
 
     return "\n".join(parts)
 
@@ -346,26 +410,14 @@ async def send_week_schedule_message(message: Message, items: List[Dict[str, Any
 
 
 def format_group_details(day_index: int, group_index: int, group: Tuple) -> str:
-    time_str, name, kind, metro, address = group
-    metro_line = f"\n🚇 <b>Метро:</b> {escape_html(metro)}" if metro else ""
-
-    return (
-        f"{type_prefix(kind)}<b>{escape_html(name)}</b>\n\n"
-        f"📅 <b>День:</b> {escape_html(DAYS[day_index])}\n"
-        f"🕒 <b>Время:</b> {escape_html(time_str)}\n"
-        f"👥 <b>Сообщество:</b> {escape_html(kind)}"
-        f"{metro_line}\n"
-        f"📍 <b>Адрес и пояснения:</b>\n{escape_html(address)}"
-    )
+    return format_schedule_item(day_index, group)
 
 
 def format_group_for_daily(time: str, name: str, kind: str, metro: str, address: str) -> str:
-    metro_str = f"   🚇 {escape_html(metro)}\n" if metro else ""
-
+    clean_address = clean_schedule_address(metro, address)
     return (
-        f"{type_prefix(kind)}<b>{escape_html(time)}</b> — {escape_html(name)} [{escape_html(kind)}]\n"
-        f"{metro_str}"
-        f"   📍 {escape_html(address)}"
+        f"• <b>{escape_html(time)}</b> — {escape_html(name)} [{escape_html(kind)}]\n"
+        f"  {escape_html(clean_address)}"
     )
 
 
@@ -460,7 +512,7 @@ async def send_long_message_to_chat(bot: Bot, chat_id: int, text: str, parse_mod
 
 
 def render_group_list_text(title: str) -> str:
-    return f"<b>{escape_html(title)}</b>\n\nВыбери группу, чтобы открыть адрес и пояснения:"
+    return f"<b>{escape_html(title)}</b>"
 
 
 async def send_group_list_message(
@@ -469,45 +521,11 @@ async def send_group_list_message(
     title: str,
     show_day: bool = False,
 ):
-    if not items:
-        await message.answer(
-            f"<b>{escape_html(title)}</b>\n\n<i>Групп не найдено.</i>",
-            parse_mode="HTML",
-        )
-        return
-
-    if len(items) <= 60:
-        view_id = create_view_context(
-            items=items,
-            title=title,
-            show_day=show_day,
-        )
-
-        await message.answer(
-            render_group_list_text(title),
-            parse_mode="HTML",
-            reply_markup=build_group_choice_keyboard(
-                items,
-                view_id=view_id,
-                show_day=show_day,
-            ),
-        )
-        return
-
-    # Защита на случай чрезмерно длинного списка: Telegram ограничивает размер inline-клавиатуры.
-    # В обычном расписании этого лимита не будет, но лучше оставить безопасный fallback.
-    lines = [f"<b>{escape_html(title)}</b>\\n"]
-    for item in items:
-        lines.append(
-            format_group_short(
-                item["day_index"],
-                item["group_index"],
-                item["group"],
-                show_day=show_day,
-            )
-        )
-
-    await send_long_message(message, "\\n".join(lines))
+    await send_long_message(
+        message,
+        format_schedule_list(items, title, show_day=show_day),
+        parse_mode="HTML",
+    )
 
 
 # ==================== БИЗНЕС-ЛОГИКА ====================
